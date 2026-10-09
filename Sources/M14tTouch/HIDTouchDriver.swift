@@ -16,9 +16,9 @@ import Foundation
 /// - finger moves → `leftMouseDragged` (only past the jitter threshold)
 /// - finger up    → `leftMouseUp`
 ///
-/// A down-then-up with no movement is therefore a normal click; a down-move-up
-/// is a drag. No multi-finger gestures — this is intentionally the simple,
-/// rock-solid case.
+/// A down-then-up with no movement is a normal click; a down-move-up is a drag.
+/// Opt-in Gen 1 scrolling uses complete reports and TouchGestures instead of
+/// the default per-element state machine.
 final class HIDTouchDriver {
 
     private var config: TouchConfig
@@ -39,6 +39,11 @@ final class HIDTouchDriver {
     private var currentRawY: Double = 0
     private var isTouching = false
     private var lastScreenPoint: CGPoint = .zero
+    private var gestures = TouchGestures()
+    private var frameContacts: [TouchContact] = []
+    private var gestureTimer: Timer?
+    private var scrollRemainder = CGPoint.zero
+    private var shutdownSignals: [DispatchSourceSignal] = []
 
     init(config: TouchConfig) {
         self.config = config
@@ -70,10 +75,17 @@ final class HIDTouchDriver {
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         self.manager = manager
 
-        IOHIDManagerSetDeviceMatching(manager, [
+        var matching: [String: Int] = [
             kIOHIDDeviceUsagePageKey: HID.Page.digitizer.rawValue,
             kIOHIDDeviceUsageKey:     HID.Digitizer.touchScreen.rawValue
-        ] as CFDictionary)
+        ].mapValues { Int($0) }
+        if config.twoFingerScroll {
+            // The raw report layout is specific to this Gen 1 controller.
+            // Preserve the existing usage-based match for default mode.
+            matching[kIOHIDVendorIDKey] = 0x2d1f
+            matching[kIOHIDProductIDKey] = 0x524c
+        }
+        IOHIDManagerSetDeviceMatching(manager, matching as CFDictionary)
 
         let context = Unmanaged.passUnretained(self).toOpaque()
 
@@ -85,9 +97,24 @@ final class HIDTouchDriver {
             HIDTouchDriver.from(ctx).deviceRemoved()
         }, context)
 
-        IOHIDManagerRegisterInputValueCallback(manager, { ctx, _, _, value in
-            HIDTouchDriver.from(ctx).handle(value)
-        }, context)
+        if config.twoFingerScroll {
+            IOHIDManagerRegisterInputReportCallback(manager, { ctx, result, _, _, reportID, report, length in
+                guard result == kIOReturnSuccess else { return }
+                HIDTouchDriver.from(ctx).handleReport(reportID: reportID,
+                    bytes: Array(UnsafeBufferPointer(start: report, count: length)))
+            }, context)
+            // A held finger must turn into a drag even if the HID device stops
+            // sending unchanged frames. Only pending presses need timer work.
+            gestureTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
+                guard let self, self.gestures.isPending else { return }
+                self.emit(self.gestures.update(self.frameContacts, at: ProcessInfo.processInfo.systemUptime))
+            }
+            log("✌️  Two-finger scrolling ON — lift both fingers before starting a new gesture")
+        } else {
+            IOHIDManagerRegisterInputValueCallback(manager, { ctx, _, _, value in
+                HIDTouchDriver.from(ctx).handle(value)
+            }, context)
+        }
 
         IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
 
@@ -97,6 +124,16 @@ final class HIDTouchDriver {
         } else {
             log("❌ Could not open HID manager (code \(result))")
             log("   Grant 'Input Monitoring' in System Settings → Privacy & Security, then retry.")
+        }
+        for signalNumber in [SIGTERM, SIGINT] {
+            signal(signalNumber, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
+            source.setEventHandler { [weak self] in
+                self?.deviceRemoved()
+                exit(0)
+            }
+            source.resume()
+            shutdownSignals.append(source)
         }
     }
 
@@ -118,6 +155,8 @@ final class HIDTouchDriver {
 
     private func deviceRemoved() {
         log("🔌 Touch device disconnected")
+        frameContacts = []
+        emit(gestures.cancel())
         // Release any held button so the cursor doesn't get stuck pressed.
         if isTouching {
             emitter.post(.leftMouseUp, at: lastScreenPoint)
@@ -179,6 +218,52 @@ final class HIDTouchDriver {
     }
 
     // MARK: - Input Handling
+
+    private func handleReport(reportID: UInt32, bytes: [UInt8]) {
+        // Both digitizer interfaces enumerate. Only report 0x0c carries the
+        // five simultaneous Gen 1 contacts; ignore the pen/secondary interface.
+        guard reportID == 0x0c else { return }
+        guard let rawContacts = M14tReport.decode(bytes) else {
+            if config.debugMode { log("HID rejected report 0x0C length=\(bytes.count) bytes=\(bytes.prefix(12))") }
+            frameContacts = []
+            emit(gestures.interrupt())
+            return
+        }
+        if config.debugMode {
+            log("HID frame 0x0C contacts=\(rawContacts.count) " + rawContacts.map {
+                "id=\($0.id) x=\(Int($0.point.x)) y=\(Int($0.point.y))"
+            }.joined(separator: " | "))
+        }
+        if config.autoCalibrate {
+            for contact in rawContacts { recordForAutoCalibration(x: contact.point.x, y: contact.point.y) }
+        }
+        frameContacts = rawContacts.map {
+            TouchContact(id: $0.id, point: mapper.map(rawX: $0.point.x, rawY: $0.point.y))
+        }
+        emit(gestures.update(frameContacts, at: ProcessInfo.processInfo.systemUptime))
+    }
+
+    private func emit(_ actions: [TouchAction]) {
+        for action in actions {
+            switch action {
+            case .move(let point):
+                scrollRemainder = .zero
+                emitter.post(.mouseMoved, at: point)
+            case .down(let point): emitter.post(.leftMouseDown, at: point)
+            case .drag(let point): emitter.post(.leftMouseDragged, at: point)
+            case .up(let point): emitter.post(.leftMouseUp, at: point)
+            case .scroll(let point, let dx, let dy):
+                scrollRemainder.x += dx
+                scrollRemainder.y += dy
+                let x = Int32(scrollRemainder.x.rounded(.towardZero))
+                let y = Int32(scrollRemainder.y.rounded(.towardZero))
+                scrollRemainder.x -= Double(x)
+                scrollRemainder.y -= Double(y)
+                if x != 0 || y != 0 { emitter.scroll(at: point, dx: x, dy: y) }
+            }
+            if config.debugMode { log("GESTURE \(action)") }
+        }
+    }
 
     private func handle(_ value: IOHIDValue) {
         let element = IOHIDValueGetElement(value)

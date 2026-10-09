@@ -19,6 +19,9 @@ struct TouchConfig {
     /// Print every raw HID event and resulting action. Useful for calibration.
     var debugMode: Bool = false
 
+    /// Opt in to Gen 1 report-based two-finger scrolling.
+    var twoFingerScroll: Bool = false
+
     /// Ask macOS to show the Accessibility permission prompt when access is missing.
     var promptForAccessibility: Bool = true
 
