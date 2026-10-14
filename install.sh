@@ -62,10 +62,8 @@ if [[ "$SKIP_CALIBRATION" == true && ! -s "$HOME/.m14ttouch.json" ]]; then
     echo "❌ No saved calibration; run without --skip-calibration first." >&2
     exit 1
 fi
-DRIVER_ARGS=(--display "$DISPLAY_INDEX")
 SCROLL_ARGUMENT_XML=""
 if [[ "$TWO_FINGER_SCROLL" == true ]]; then
-    DRIVER_ARGS+=(--two-finger-scroll)
     SCROLL_ARGUMENT_XML="        <string>--two-finger-scroll</string>"
 fi
 
@@ -118,12 +116,20 @@ calibrate() {
 echo "🔨 Building release binary…"
 swift build -c release
 
+# Resolve the current index before stopping a working agent. Persist identity,
+# since indices change when the main display or connection order changes.
+BUILD_BINARY="$(pwd)/.build/release/m14ttouch"
+DISPLAY_UUID="$("$BUILD_BINARY" --display "$DISPLAY_INDEX" --print-display-uuid)"
+DRIVER_ARGS=(--display-uuid "$DISPLAY_UUID")
+if [[ "$TWO_FINGER_SCROLL" == true ]]; then
+    DRIVER_ARGS+=(--two-finger-scroll)
+fi
+
 # Do not run the old login agent alongside the calibration process.
 if [[ "$AUTOSTART" == true ]]; then
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 fi
 
-BUILD_BINARY="$(pwd)/.build/release/m14ttouch"
 mkdir -p "$INSTALL_DIR"
 if [[ -f "$INSTALL_BINARY" ]] && cmp -s "$BUILD_BINARY" "$INSTALL_BINARY"; then
     chmod +x "$INSTALL_BINARY"
@@ -154,8 +160,8 @@ if [[ "$AUTOSTART" == true ]]; then
     <key>ProgramArguments</key>
     <array>
         <string>${BINARY}</string>
-        <string>--display</string>
-        <string>${DISPLAY_INDEX}</string>
+        <string>--display-uuid</string>
+        <string>${DISPLAY_UUID}</string>
 ${SCROLL_ARGUMENT_XML}
         <string>--no-accessibility-prompt</string>
     </array>

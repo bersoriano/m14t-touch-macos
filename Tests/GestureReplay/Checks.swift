@@ -129,4 +129,63 @@ func runGestureReplayChecks(_ check: (Bool, String) -> Void) {
     check(gesture.interrupt() == [.up(p)], "rejected frame releases active drag")
     check(gesture.update([first], at: 0.14).isEmpty, "rejected drag frame suppresses remaining finger")
     check(gesture.update([], at: 0.15).isEmpty, "rejected drag frame cannot produce a release click")
+
+    // Display indices change when another screen becomes main. Identity must not.
+    let touchUUID = "11111111-1111-4111-8111-111111111111"
+    let otherUUID = "22222222-2222-4222-8222-222222222222"
+    let oldTouch = DisplayInfo(index: 1, id: 3, uuid: touchUUID,
+        bounds: CGRect(x: 2560, y: 0, width: 1920, height: 1080), isMain: false)
+    let other = DisplayInfo(index: 0, id: 2, uuid: otherUUID,
+        bounds: CGRect(x: 0, y: 0, width: 2560, height: 1080), isMain: true)
+    var target = DisplayTarget(index: 1, uuid: nil, displays: [other, oldTouch])
+    check(target.uuid == touchUUID && target.current == oldTouch, "index selection pins display identity")
+    let movedDisplay = DisplayInfo(index: 0, id: 3, uuid: touchUUID,
+        bounds: CGRect(x: -1600, y: -900, width: 1600, height: 900), isMain: true)
+    check(target.refresh([movedDisplay, other]), "move, resize and main-display change refresh target")
+    check(target.current == movedDisplay, "reordered displays retain touch screen")
+    var movedMapper = mapper
+    movedMapper.displayBounds = target.current!.bounds
+    check(movedMapper.map(rawX: 6133, rawY: 3479.5) == CGPoint(x: -800, y: -450), "new coordinates include negative origin and new size")
+    check(!target.refresh([movedDisplay, other]), "unchanged layout does not interrupt gestures")
+    check(target.refresh([other]) && target.current == nil, "missing target pauses without main-display fallback")
+    let returned = DisplayInfo(index: 1, id: 99, uuid: touchUUID, bounds: oldTouch.bounds, isMain: false)
+    check(target.refresh([other, returned]) && target.current == returned, "reconnect follows UUID despite changed display ID")
+    var absent = DisplayTarget(index: 1, uuid: touchUUID, displays: [other])
+    check(absent.current == nil && absent.refresh([returned]), "saved UUID can wait for monitor at login")
+    check(DisplayTarget(index: 9, uuid: nil, displays: [other]).uuid == nil, "invalid index never falls back to another screen")
+    if case .run(let config) = ArgumentParser.parse(["--display-uuid", touchUUID.lowercased()]) {
+        check(config.displayUUID == touchUUID, "CLI normalizes stable display UUID")
+    } else { check(false, "CLI accepts display UUID") }
+    if case .error = ArgumentParser.parse(["--display-uuid", "bad"]) {
+        check(true, "CLI rejects malformed display UUID")
+    } else { check(false, "CLI rejects malformed display UUID") }
+    if case .printDisplayUUID(let config) = ArgumentParser.parse(["--print-display-uuid", "--display", "0"]) {
+        check(config.displayIndex == 0, "UUID lookup accepts later display option")
+    } else { check(false, "CLI supports installer UUID lookup") }
+
+    gesture = TouchGestures()
+    _ = gesture.update([first], at: 0)
+    check(gesture.interrupt().isEmpty && !gesture.isPending, "layout change cancels delayed press")
+    check(gesture.update([first], at: 1).isEmpty, "timer cannot click stale coordinates after layout change")
+    _ = gesture.update([], at: 1.1)
+    _ = gesture.update([first, second], at: 2)
+    _ = gesture.interrupt()
+    check(gesture.update([first, second], at: 2.1).isEmpty, "layout change discards old scroll anchor")
+    _ = gesture.update([], at: 2.2)
+    let newFirst = contact(1, -900, -450)
+    let newSecond = contact(2, -700, -450)
+    check(gesture.update([newFirst, newSecond], at: 3) == [.move(CGPoint(x: -800, y: -450))], "new scroll anchors on moved touch display")
+
+    // USB can continue reporting a release while the video connection is absent.
+    gesture = TouchGestures()
+    _ = gesture.update([first], at: 0)
+    _ = gesture.update([first], at: 0.13)
+    check(gesture.update([first], at: 0.2, inputEnabled: false) == [.up(p)], "missing display releases active drag")
+    check(gesture.update([first, second], at: 0.3, inputEnabled: false).isEmpty, "missing display cannot start scroll")
+    check(gesture.update([], at: 0.4, inputEnabled: false).isEmpty, "release while missing emits no click")
+    check(gesture.update([newFirst], at: 0.5) == [.move(newFirst.point)], "first touch after reconnect works when fingers lifted while missing")
+    check(gesture.update([], at: 0.55) == [.down(newFirst.point), .up(newFirst.point)], "reconnected tap lands in new coordinate space")
+    _ = gesture.update([first, second], at: 1, inputEnabled: false)
+    check(gesture.update([first, second], at: 1.1).isEmpty, "fingers held through reconnect remain suppressed until lift")
+
 }

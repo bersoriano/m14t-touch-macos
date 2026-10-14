@@ -30,7 +30,14 @@ struct TouchGestures {
         return false
     }
 
-    mutating func update(_ contacts: [TouchContact], at time: Double) -> [TouchAction] {
+    mutating func update(_ contacts: [TouchContact], at time: Double, inputEnabled: Bool = true) -> [TouchAction] {
+        // While video is unavailable, still acknowledge releases from USB HID.
+        // No new gestures may start, but a completed lift permits the next one.
+        guard inputEnabled else {
+            let actions = interrupt()
+            if contacts.isEmpty { state = .idle }
+            return actions
+        }
         let ids = Set(contacts.map(\.id))
         guard contacts.count <= 2, ids.count == contacts.count else {
             let actions = cancel()

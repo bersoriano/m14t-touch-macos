@@ -126,6 +126,28 @@ silently via LaunchAgent, discards normal output, and writes errors to
 
 ---
 
+## Keeping touch on the M14t after display changes
+
+`--display N` selects a display once, then tracks its UUID and current bounds.
+Moving displays in System Settings, changing the main display, or changing
+resolution no longer redirects touch to another monitor. Active gestures are
+cancelled on a layout change; lift all fingers before starting again. Input
+pauses while the selected display is disconnected and resumes when it returns.
+
+The installer saves the selected display's UUID in the login agent, so selection
+also survives restarts and changes to display ordering. When upgrading an old
+index-based agent, run `--list` first, then reinstall using the M14t's **current**
+index (for example, if it is now display 0):
+
+```sh
+DISPLAY_INDEX=0 ./install.sh --autostart --two-finger-scroll --skip-calibration
+```
+
+For manual launches, use `--display-uuid UUID` with the identity printed by
+`--list`. It takes precedence over `--display`. An unavailable UUID waits for that
+monitor; an invalid index exits instead of falling back to the main display.
+`--print-display-uuid --display N` prints only the selected UUID for scripts.
+
 ## Two-finger scrolling (Gen 1, opt-in)
 
 For the original 1920×1080 M14t with USB controller `2d1f:524c`, set the monitor's
@@ -239,7 +261,9 @@ m14ttouch --display 1 --invert-y              # fix a flipped axis
 ## All options
 
 ```
---display N          Display index the M14t is mapped to (default: 1)
+--display N          Initial display index (default: 1); then track UUID
+--display-uuid UUID  Stable display identity; overrides --display
+--print-display-uuid Print selected display UUID and exit
 --auto-calibrate     Learn the touch range, then persist it
 --invert-x           Mirror the horizontal axis
 --invert-y           Mirror the vertical axis
@@ -271,7 +295,8 @@ runner for Command Line Tools installations that lack XCTest:
 bash test-gestures.sh
 ```
 
-Replay coverage includes tap/drag timing, contact IDs and slot order, both scroll
+Replay coverage includes stable display selection, rearrangement/resizing, reconnect
+recovery, tap/drag timing, contact IDs and slot order, both scroll
 axes, finger lifts, malformed reports, palm filtering, and cancellation. Real
 hardware validation is still needed to verify event delivery and app behavior.
 

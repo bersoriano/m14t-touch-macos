@@ -30,6 +30,9 @@ final class HIDTouchDriver {
     // Coordinate state
     private var calibration: CalibrationData
     private var mapper: CoordinateMapper
+    private var target: DisplayTarget
+    private var displayTimer: Timer?
+    private var waitForTouchRelease = false
 
     // Auto-calibration: the tightest range observed so far
     private var observed = ObservedRange()
@@ -52,10 +55,12 @@ final class HIDTouchDriver {
         let initial = CalibrationData.identity
         self.calibration = initial
 
-        let (bounds, _) = DisplayResolver.bounds(forIndex: config.displayIndex)
+        let target = DisplayTarget(index: config.displayIndex, uuid: config.displayUUID,
+                                   displays: DisplayResolver.all())
+        self.target = target
         self.mapper = CoordinateMapper(
             calibration: initial,
-            displayBounds: bounds,
+            displayBounds: target.current?.bounds ?? .zero,
             invertX: config.invertX,
             invertY: config.invertY
         )
@@ -65,12 +70,16 @@ final class HIDTouchDriver {
 
     /// Open the HID manager and begin listening. Blocks via the caller's run loop.
     func start() {
-        let (bounds, resolvedIndex) = DisplayResolver.bounds(forIndex: config.displayIndex)
-        mapper.displayBounds = bounds
-        if resolvedIndex != config.displayIndex {
-            log("⚠️  Display index \(config.displayIndex) out of range — using [\(resolvedIndex)]")
+        guard target.uuid != nil else {
+            log("❌ Selected display is unavailable. Use --list to select the M14t.")
+            exit(1)
         }
-        log("🖥️  Target display [\(resolvedIndex)]: \(Int(bounds.width))×\(Int(bounds.height)) @ (\(Int(bounds.minX)),\(Int(bounds.minY)))")
+        logTarget()
+        // Refresh even when no HID reports arrive, so held buttons are released
+        // on disconnect. Input and pending-press paths also refresh immediately.
+        displayTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.refreshDisplay()
+        }
 
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
         self.manager = manager
@@ -107,6 +116,8 @@ final class HIDTouchDriver {
             // sending unchanged frames. Only pending presses need timer work.
             gestureTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
                 guard let self, self.gestures.isPending else { return }
+                self.refreshDisplay()
+                guard self.target.current != nil, self.gestures.isPending else { return }
                 self.emit(self.gestures.update(self.frameContacts, at: ProcessInfo.processInfo.systemUptime))
             }
             log("✌️  Two-finger scrolling ON — lift both fingers before starting a new gesture")
@@ -140,6 +151,33 @@ final class HIDTouchDriver {
     /// Recover `self` from the opaque pointer passed to C callbacks.
     private static func from(_ ctx: UnsafeMutableRawPointer?) -> HIDTouchDriver {
         Unmanaged<HIDTouchDriver>.fromOpaque(ctx!).takeUnretainedValue()
+    }
+
+    // MARK: - Display tracking
+
+    private func logTarget() {
+        if let display = target.current {
+            let bounds = display.bounds
+            log("🖥️  Target \(display.uuid) [\(display.index)]: \(Int(bounds.width))×\(Int(bounds.height)) @ (\(Int(bounds.minX)),\(Int(bounds.minY)))")
+        } else {
+            log("⏸️  Target display \(target.uuid ?? "unknown") disconnected; touch input paused")
+        }
+    }
+
+    private func refreshDisplay() {
+        guard target.refresh(DisplayResolver.all()) else { return }
+        // A pending press or scroll anchor belongs to the old coordinate space.
+        // An interrupted gesture must lift completely before it can restart.
+        if !frameContacts.isEmpty { emit(gestures.interrupt()) }
+        frameContacts = []
+        scrollRemainder = .zero
+        if isTouching {
+            emitter.post(.leftMouseUp, at: lastScreenPoint)
+            isTouching = false
+            waitForTouchRelease = true
+        }
+        mapper.displayBounds = target.current?.bounds ?? .zero
+        logTarget()
     }
 
     // MARK: - Device Callbacks
@@ -223,6 +261,7 @@ final class HIDTouchDriver {
         // Both digitizer interfaces enumerate. Only report 0x0c carries the
         // five simultaneous Gen 1 contacts; ignore the pen/secondary interface.
         guard reportID == 0x0c else { return }
+        refreshDisplay()
         guard let rawContacts = M14tReport.decode(bytes) else {
             if config.debugMode { log("HID rejected report 0x0C length=\(bytes.count) bytes=\(bytes.prefix(12))") }
             frameContacts = []
@@ -233,6 +272,11 @@ final class HIDTouchDriver {
             log("HID frame 0x0C contacts=\(rawContacts.count) " + rawContacts.map {
                 "id=\($0.id) x=\(Int($0.point.x)) y=\(Int($0.point.y))"
             }.joined(separator: " | "))
+        }
+        guard target.current != nil else {
+            frameContacts = []
+            emit(gestures.update(rawContacts, at: ProcessInfo.processInfo.systemUptime, inputEnabled: false))
+            return
         }
         if config.autoCalibrate {
             for contact in rawContacts { recordForAutoCalibration(x: contact.point.x, y: contact.point.y) }
@@ -266,10 +310,17 @@ final class HIDTouchDriver {
     }
 
     private func handle(_ value: IOHIDValue) {
+        refreshDisplay()
         let element = IOHIDValueGetElement(value)
         let page    = IOHIDElementGetUsagePage(element)
         let usage   = IOHIDElementGetUsage(element)
         let intVal  = IOHIDValueGetIntegerValue(value)
+        guard target.current != nil else {
+            if page == HID.Page.digitizer.rawValue && usage == HID.Digitizer.tipSwitch.rawValue {
+                waitForTouchRelease = intVal != 0
+            }
+            return
+        }
 
         if config.debugMode {
             log("HID  page=0x\(hex(Int(page)))  usage=0x\(hex(Int(usage)))  val=\(intVal)")
@@ -297,6 +348,10 @@ final class HIDTouchDriver {
 
     /// Finger made or broke contact with the surface.
     private func updateContact(touching: Bool) {
+        if waitForTouchRelease {
+            if !touching { waitForTouchRelease = false }
+            return
+        }
         if touching, !isTouching {
             isTouching = true
             lastScreenPoint = mapper.map(rawX: currentRawX, rawY: currentRawY)
