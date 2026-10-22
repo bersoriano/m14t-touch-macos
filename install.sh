@@ -7,12 +7,18 @@
 #   ./install.sh --autostart  # build, calibrate, and install a LaunchAgent
 #
 set -euo pipefail
+cd "$(dirname "$0")"
 
 DISPLAY_INDEX="${DISPLAY_INDEX:-1}"
 LABEL="com.talesfonseca.m14ttouch"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 INSTALL_DIR="$HOME/.local/bin"
-INSTALL_BINARY="$INSTALL_DIR/m14ttouch"
+APP="$HOME/Applications/M14t Touch.app"
+INSTALL_BINARY="$APP/Contents/MacOS/m14ttouch"
+CLI_BINARY="$INSTALL_DIR/m14ttouch"
+# A real signing identity can preserve grants across rebuilds. Ad-hoc signing
+# gives local installs a bundle identity, but changed builds may need approval.
+SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
 AUTOSTART=false
 BINARY_UPDATED=false
 TWO_FINGER_SCROLL=false
@@ -32,6 +38,7 @@ Usage:
   Add --skip-calibration    Keep existing ~/.m14ttouch.json
 
 Set DISPLAY_INDEX=N to target a different display.
+Set SIGNING_IDENTITY to a codesigning identity to sign updates consistently.
 EOF
 }
 
@@ -107,9 +114,21 @@ calibrate() {
     "$BINARY" "${DRIVER_ARGS[@]}" --auto-calibrate </dev/null &
     calibration_pid="$!"
 
+    sleep 1
+    if ! kill -0 "$calibration_pid" 2>/dev/null; then
+        wait "$calibration_pid" || true
+        calibration_pid=""
+        echo "❌ Calibration could not start. Grant the installed app permissions, then retry." >&2
+        exit 1
+    fi
+
     read -r -p "Press Enter when calibration is done… "
 
     cleanup_calibration
+    if [[ ! -s "$HOME/.m14ttouch.json" ]]; then
+        echo "❌ No calibration was captured. Check Input Monitoring and touch all four corners." >&2
+        exit 1
+    fi
     echo "✅ Calibration stopped. Saved calibration: $HOME/.m14ttouch.json"
 }
 
@@ -130,16 +149,29 @@ if [[ "$AUTOSTART" == true ]]; then
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 fi
 
-mkdir -p "$INSTALL_DIR"
-if [[ -f "$INSTALL_BINARY" ]] && cmp -s "$BUILD_BINARY" "$INSTALL_BINARY"; then
-    chmod +x "$INSTALL_BINARY"
+SOURCE_HASH="$(shasum -a 256 "$BUILD_BINARY")"
+SOURCE_HASH="${SOURCE_HASH%% *}"
+mkdir -p "$INSTALL_DIR" "$APP/Contents/MacOS" "$APP/Contents/Resources"
+if [[ -f "$INSTALL_BINARY" ]] && [[ "$(cat "$APP/Contents/Resources/build-sha256" 2>/dev/null)" == "$SOURCE_HASH" ]] \
+    && cmp -s Resources/Info.plist "$APP/Contents/Info.plist" \
+    && [[ "$(cat "$APP/Contents/Resources/signing-identity" 2>/dev/null)" == "$SIGNING_IDENTITY" ]] \
+    && codesign --verify "$APP" 2>/dev/null; then
+    echo "✅ Installed app is unchanged; keeping its signature."
 else
     cp "$BUILD_BINARY" "$INSTALL_BINARY"
+    printf '%s' "$SOURCE_HASH" > "$APP/Contents/Resources/build-sha256"
+    cp Resources/Info.plist "$APP/Contents/Info.plist"
+    printf '%s' "$SIGNING_IDENTITY" > "$APP/Contents/Resources/signing-identity"
     chmod +x "$INSTALL_BINARY"
+    codesign --force --sign "$SIGNING_IDENTITY" --identifier "$LABEL" "$APP"
+    codesign --verify --strict "$APP"
     BINARY_UPDATED=true
 fi
+# The CLI and LaunchAgent now use the same executable in the same app bundle.
+ln -sfn "$INSTALL_BINARY" "$CLI_BINARY"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP"
 BINARY="$INSTALL_BINARY"
-echo "✅ Installed: $BINARY"
+echo "✅ Installed: $APP (CLI: $CLI_BINARY)"
 
 if [[ "$SKIP_CALIBRATION" == true ]]; then
     echo "✅ Keeping saved calibration: $HOME/.m14ttouch.json"
@@ -150,6 +182,9 @@ fi
 if [[ "$AUTOSTART" == true ]]; then
     echo "📝 Installing LaunchAgent for display index ${DISPLAY_INDEX}…"
     mkdir -p "$HOME/Library/LaunchAgents"
+    BINARY_XML="${BINARY//&/\&amp;}"
+    BINARY_XML="${BINARY_XML//</\&lt;}"
+    BINARY_XML="${BINARY_XML//>/\&gt;}"
     cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -159,7 +194,7 @@ if [[ "$AUTOSTART" == true ]]; then
     <string>${LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${BINARY}</string>
+        <string>${BINARY_XML}</string>
         <string>--display-uuid</string>
         <string>${DISPLAY_UUID}</string>
 ${SCROLL_ARGUMENT_XML}
@@ -169,8 +204,8 @@ ${SCROLL_ARGUMENT_XML}
     <true/>
     <key>KeepAlive</key>
     <dict>
-        <key>SuccessfulExit</key>
-        <false/>
+        <key>Crashed</key>
+        <true/>
     </dict>
     <key>StandardInPath</key>
     <string>/dev/null</string>
@@ -184,18 +219,27 @@ EOF
     plutil -lint "$PLIST" >/dev/null
     launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
     launchctl bootstrap "gui/$(id -u)" "$PLIST"
-    launchctl kickstart -k "gui/$(id -u)/$LABEL" 2>/dev/null || true
-    echo "✅ Autostart enabled. Background stdout is discarded; errors: /tmp/m14ttouch.err.log"
-    if [[ "$BINARY_UPDATED" == true ]]; then
-        echo "   The installed binary was updated; macOS may require re-adding Accessibility for: $BINARY"
+    # bootstrap starts RunAtLoad. Check that process, without restarting it and
+    # mistaking a successful launchctl command for a healthy driver.
+    sleep 2
+    AGENT_STATUS="$(launchctl print "gui/$(id -u)/$LABEL")"
+    if [[ "$AGENT_STATUS" != *"state = running"* ]]; then
+        echo "⚠️ Autostart registered, but the driver did not stay running." >&2
+        tail -n 12 /tmp/m14ttouch.err.log >&2
+        echo "   Add $APP to Accessibility and Input Monitoring, then enable it." >&2
+        echo "   A terminal's permission does not authorize the login agent." >&2
+        echo "   Restart: launchctl kickstart -k gui/$(id -u)/$LABEL" >&2
+        exit 1
     fi
-    echo "   If it does not stay running, remove any old m14ttouch Accessibility entry, add: $BINARY"
-    echo "   Then restart it without rebuilding: launchctl kickstart -k gui/$(id -u)/$LABEL"
+    echo "✅ Autostart enabled and driver running. Errors: /tmp/m14ttouch.err.log"
+    if [[ "$BINARY_UPDATED" == true && "$SIGNING_IDENTITY" == "-" ]]; then
+        echo "   Local ad-hoc builds may need renewed permission after an update."
+    fi
     echo "   To disable: launchctl bootout gui/$(id -u) $PLIST && rm $PLIST"
 else
     echo ""
     echo "Run it with:"
-    echo "  $BINARY ${DRIVER_ARGS[*]}"
+    echo "  \"$CLI_BINARY\" ${DRIVER_ARGS[*]}"
     echo ""
     echo "Or enable autostart with:"
     echo "  ./install.sh --autostart"

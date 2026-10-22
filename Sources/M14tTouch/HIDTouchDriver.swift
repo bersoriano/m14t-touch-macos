@@ -133,8 +133,8 @@ final class HIDTouchDriver {
         if result == kIOReturnSuccess {
             log("✅ Listening for touch device…")
         } else {
-            log("❌ Could not open HID manager (code \(result))")
-            log("   Grant 'Input Monitoring' in System Settings → Privacy & Security, then retry.")
+            fputs("Could not open HID manager (code \(result)). Grant Input Monitoring to ~/Applications/M14t Touch.app, then restart.\n", stderr)
+            exit(1)
         }
         for signalNumber in [SIGTERM, SIGINT] {
             signal(signalNumber, SIG_IGN)
