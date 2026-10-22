@@ -132,15 +132,19 @@ executable inside that app so you can grant permissions to a visible app:
 
 ## Keeping touch on the M14t after display changes
 
-`--display N` selects a display once, then tracks its UUID and current bounds.
+`--display N` selects a display once, then tracks its UUID, hardware identity
+(vendor, model and nonzero serial), and current bounds.
 Moving displays in System Settings, changing the main display, or changing
 resolution no longer redirects touch to another monitor. Active gestures are
 cancelled on a layout change; lift all fingers before starting again. Input
 pauses while the selected display is disconnected and resumes when it returns.
 
-The installer saves the selected display's UUID in the login agent, so selection
-also survives restarts and changes to display ordering. When upgrading an old
-index-based agent, run `--list` first, then reinstall using the M14t's **current**
+The installer saves both UUID and hardware identity in the login agent, so
+selection survives restarts, display ordering changes, and USB reconnects that
+change macOS's UUID. Recovery requires exactly one matching physical panel;
+missing or ambiguous matches pause input. A monitor without a usable serial
+continues to use UUID only. When upgrading an old index- or UUID-only agent,
+run `--list` first, then reinstall using the M14t's **current**
 index (for example, if it is now display 0):
 
 ```sh
@@ -151,9 +155,12 @@ Include `--stylus` in reinstall commands if you use the active pen; installer
 options replace the previous login agent's options.
 
 For manual launches, use `--display-uuid UUID` with the identity printed by
-`--list`. It takes precedence over `--display`. An unavailable UUID waits for that
-monitor; an invalid index exits instead of falling back to the main display.
-`--print-display-uuid --display N` prints only the selected UUID for scripts.
+`--list`. It takes precedence over `--display`. Add `--display-hardware-id V:M:S`
+using the value from `--list` to retain physical matching across process restarts.
+An unavailable target waits for that monitor; an invalid index exits instead of
+falling back to the main display. `--print-display-uuid --display N` prints only
+the selected UUID for scripts. `--print-display-hardware-id --display N` prints
+its physical identity, or a blank line if its serial is unavailable.
 
 ## Two-finger scrolling (Gen 1, opt-in)
 
@@ -245,7 +252,7 @@ input devices are unaffected; stopping the process releases the digitizer.
 
 Pen coordinates use the Gen 1 digitizer's separate factory range. Finger
 calibration and any personal touch offset remain unchanged. Both input types
-follow the same display UUID and layout changes; interrupted pen strokes must
+follow the same physical display and layout changes; interrupted pen strokes must
 lift before resuming. Pen packets do not participate in finger auto-calibration.
 
 The report layout and native tablet emission are adapted from this repository's
@@ -258,11 +265,14 @@ finger tap/two-finger scrolling after moving the pen away. Pressure-sensitive
 brush response and eraser behavior still depend on the application and have not
 been validated in that test.
 
-Changing the USB connection can change macOS's display UUID. If input stops
-after reconnection, use `--list` to identify the M14t's current index, then rerun
-the installer with that `DISPLAY_INDEX` and `--skip-calibration` to retain the
-saved finger calibration. A display that is absent stays paused rather than
-redirecting input to another monitor.
+Changing the USB connection can change macOS's display UUID. Current installs
+recover using the panel's saved hardware identity. Older UUID-only agents need
+one reinstall with the current M14t `DISPLAY_INDEX` and
+`--stylus --two-finger-scroll --skip-calibration` to enable this recovery while
+retaining finger calibration. A display that is absent stays paused rather than
+redirecting input to another monitor. Physical testing on this setup also
+confirmed automatic finger and pen recovery after unplugging and reconnecting
+USB-C, without restarting the agent.
 
 The supplied Lenovo Digital Pen needs an AAAA battery, with its positive end
 pointing toward the tip. If `--debug` shows finger frames but no `PEN` lines,
@@ -344,9 +354,13 @@ m14ttouch --display 1 --invert-y              # fix a flipped axis
 ## All options
 
 ```
---display N          Initial display index (default: 1); then track UUID
---display-uuid UUID  Stable display identity; overrides --display
+--display N          Initial display index (default: 1); then track selected panel
+--display-uuid UUID  Preferred display UUID; overrides --display
 --print-display-uuid Print selected display UUID and exit
+--display-hardware-id V:M:S
+                     Physical vendor:model:serial identity for reconnect recovery
+--print-display-hardware-id
+                     Print selected hardware identity (blank if unavailable)
 --auto-calibrate     Learn the touch range, then persist it
 --invert-x           Mirror the horizontal axis
 --invert-y           Mirror the vertical axis
@@ -382,7 +396,7 @@ bash test-gestures.sh
 Replay coverage includes stable display selection, rearrangement/resizing, reconnect
 recovery, tap/drag timing, contact IDs and slot order, both scroll axes, finger
 lifts, malformed reports, palm filtering, pen pressure/tilt, held tablet-button
-state, and cancellation. The runner currently passes 110 checks. Replay tests
+state, and cancellation. Replay tests
 cannot establish real event delivery or app behavior; the physical validation
 above records what was tested on the connected Gen 1 panel.
 
@@ -403,7 +417,7 @@ above records what was tested on the connected Gen 1 panel.
 | Cursor jumps or windows flicker | Stop extra manual copies; run only one driver instance |
 | Pen works in monitor menu but not on Mac | Set OSD Touch Support to **Windows**, close the menu, reconnect USB-C, and run with `--stylus` |
 | Notes draws dots instead of continuous pen strokes | Use the current `--stylus` build: it holds the tablet button during drags and takes exclusive M14t access to prevent competing native events |
-| Input stops after changing USB connection | Check `--list`; the display UUID may have changed. Reinstall with the current M14t `DISPLAY_INDEX`, `--stylus --two-finger-scroll --skip-calibration` |
+| Input stops after changing USB connection | Upgrade UUID-only agents once with current M14t `DISPLAY_INDEX` and `--stylus --two-finger-scroll --skip-calibration`. Current installer saves physical identity for automatic recovery; unavailable or ambiguous identities stay paused |
 
 ---
 

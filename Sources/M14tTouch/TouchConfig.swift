@@ -10,8 +10,11 @@ struct TouchConfig {
     /// Index of the display the M14t is mapped to (`0` is the main display).
     var displayIndex: Int = 1
 
-    /// Stable display identity; takes precedence over the initial index.
+    /// Preferred display UUID; takes precedence over the initial index.
     var displayUUID: String?
+
+    /// Physical panel identity for recovery when a USB reconnect changes UUID.
+    var displayHardwareID: DisplayHardwareID?
 
     /// Mirror the horizontal axis (use if touch is flipped left↔right).
     var invertX: Bool = false

@@ -154,6 +154,63 @@ func runGestureReplayChecks(_ check: (Bool, String) -> Void) {
     var absent = DisplayTarget(index: 1, uuid: touchUUID, displays: [other])
     check(absent.current == nil && absent.refresh([returned]), "saved UUID can wait for monitor at login")
     check(DisplayTarget(index: 9, uuid: nil, displays: [other]).uuid == nil, "invalid index never falls back to another screen")
+    let panelID = DisplayHardwareID(vendor: 12462, model: 25251, serial: 123456)!
+    var physicalTouch = oldTouch
+    physicalTouch.hardwareID = panelID
+    var physicalTarget = DisplayTarget(index: 1, uuid: touchUUID, displays: [other, physicalTouch])
+    _ = physicalTarget.refresh([other])
+    let newUUID = "33333333-3333-4333-8333-333333333333"
+    let reidentified = DisplayInfo(index: 0, id: 101, uuid: newUUID,
+        bounds: CGRect(x: 0, y: 1080, width: 1920, height: 1080), isMain: false,
+        hardwareID: panelID)
+    check(physicalTarget.refresh([other, reidentified]) && physicalTarget.current == reidentified,
+          "USB reconnect recovers same physical panel with new UUID")
+    check(!physicalTarget.refresh([other, reidentified]), "recovered identity remains stable")
+    let siblingID = DisplayHardwareID(vendor: 12462, model: 25251, serial: 654321)!
+    let sibling = DisplayInfo(index: 1, id: 102, uuid: touchUUID,
+        bounds: oldTouch.bounds, isMain: true, hardwareID: siblingID)
+    _ = physicalTarget.refresh([other, sibling])
+    check(physicalTarget.current == nil, "same model with different serial cannot take over old UUID")
+    _ = physicalTarget.refresh([sibling, reidentified])
+    check(physicalTarget.current == reidentified, "physical identity wins over reused UUID on another panel")
+    let duplicate = DisplayInfo(index: 2, id: 103, uuid: "44444444-4444-4444-8444-444444444444",
+        bounds: other.bounds, isMain: false, hardwareID: panelID)
+    _ = physicalTarget.refresh([reidentified, duplicate])
+    check(physicalTarget.current == nil, "ambiguous hardware identity pauses instead of guessing")
+    var savedPhysical = DisplayTarget(index: 0, uuid: touchUUID, hardwareID: panelID, displays: [other])
+    check(savedPhysical.current == nil && savedPhysical.refresh([other, reidentified]) &&
+          savedPhysical.current == reidentified, "saved hardware identity recovers after login while disconnected")
+    check(DisplayTarget(index: 0, uuid: touchUUID, hardwareID: panelID,
+        displays: [other, reidentified]).current == reidentified, "saved hardware identity recovers stale UUID at startup")
+    var lateArrival = DisplayTarget(index: 1, uuid: touchUUID, displays: [other])
+    _ = lateArrival.refresh([other, physicalTouch])
+    _ = lateArrival.refresh([other])
+    _ = lateArrival.refresh([other, reidentified])
+    check(lateArrival.current == reidentified,
+          "UUID-only launch learns physical identity when absent panel first connects")
+    check(DisplayTarget(index: 0, uuid: nil, hardwareID: panelID,
+        displays: [other, reidentified]).current == reidentified, "hardware selector overrides default display index")
+    check(DisplayTarget(index: 0, uuid: nil, hardwareID: panelID,
+        displays: [reidentified, duplicate]).current == nil, "hardware-only selection rejects duplicate serials")
+    var noSerial = DisplayTarget(index: 1, uuid: touchUUID, displays: [other, oldTouch])
+    _ = noSerial.refresh([other, reidentified])
+    check(noSerial.current == nil, "missing serial never guesses by model or resolution")
+    check(DisplayHardwareID(vendor: 12462, model: 25251, serial: 0) == nil,
+          "zero serial disables physical fallback")
+    if case .run(let config) = ArgumentParser.parse(["--display-hardware-id", panelID.description]) {
+        check(config.displayHardwareID == panelID, "CLI accepts persistent physical identity")
+    } else { check(false, "CLI accepts persistent physical identity") }
+    for invalid in ["", "1:2", "1:2:0", "1::3", "1:2:-3", "1:2:4294967296", "1:2:3:4", "x:2:3"] {
+        if case .error = ArgumentParser.parse(["--display-hardware-id", invalid]) {
+            check(true, "CLI rejects invalid hardware ID \(invalid)")
+        } else { check(false, "CLI rejects invalid hardware ID \(invalid)") }
+    }
+    if case .printDisplayHardwareID(let config) = ArgumentParser.parse(["--print-display-hardware-id", "--display", "1"]) {
+        check(config.displayIndex == 1, "installer can query selected physical identity")
+    } else { check(false, "installer can query selected physical identity") }
+    if case .error = ArgumentParser.parse(["--print-display-uuid", "--print-display-hardware-id"]) {
+        check(true, "installer print actions cannot be mixed")
+    } else { check(false, "installer print actions cannot be mixed") }
     if case .run(let config) = ArgumentParser.parse(["--display-uuid", touchUUID.lowercased()]) {
         check(config.displayUUID == touchUUID, "CLI normalizes stable display UUID")
     } else { check(false, "CLI accepts display UUID") }

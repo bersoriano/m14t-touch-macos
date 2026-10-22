@@ -23,6 +23,7 @@ func printDisplays() {
         let tag = d.isMain ? "  ← main" : ""
         print("   [\(d.index)]  \(Int(d.bounds.width)) × \(Int(d.bounds.height))  @ (\(Int(d.bounds.minX)),\(Int(d.bounds.minY)))\(tag)")
         print("        UUID: \(d.uuid)")
+        print("        Hardware ID: \(d.hardwareID?.description ?? "unavailable")")
     }
 }
 
@@ -67,12 +68,24 @@ case .listDisplays:
 
 case .printDisplayUUID(let config):
     let target = DisplayTarget(index: config.displayIndex, uuid: config.displayUUID,
+                               hardwareID: config.displayHardwareID,
                                displays: DisplayResolver.all())
     guard let display = target.current else {
         fputs("Selected display is not connected; use --list to select the M14t.\n", stderr)
         exit(1)
     }
     print(display.uuid)
+    exit(0)
+
+case .printDisplayHardwareID(let config):
+    let target = DisplayTarget(index: config.displayIndex, uuid: config.displayUUID,
+                               hardwareID: config.displayHardwareID,
+                               displays: DisplayResolver.all())
+    guard let display = target.current else {
+        fputs("Selected display is not connected; use --list to select the M14t.\n", stderr)
+        exit(1)
+    }
+    print(display.hardwareID?.description ?? "")
     exit(0)
 
 case .resetCalibration:

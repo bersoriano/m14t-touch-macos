@@ -12,6 +12,7 @@ enum ArgumentParser {
         case run(TouchConfig)
         case listDisplays
         case printDisplayUUID(TouchConfig)
+        case printDisplayHardwareID(TouchConfig)
         case resetCalibration
         case help
         case error(String)
@@ -20,6 +21,7 @@ enum ArgumentParser {
     static func parse(_ arguments: [String]) -> Outcome {
         var config = TouchConfig()
         var printDisplayUUID = false
+        var printDisplayHardwareID = false
         var iterator = arguments.makeIterator()
 
         func nextDouble() -> Double? {
@@ -45,6 +47,12 @@ enum ArgumentParser {
                 }
                 config.displayUUID = uuid.uuidString
             case "--print-display-uuid": printDisplayUUID = true
+            case "--display-hardware-id":
+                guard let raw = iterator.next(), let id = DisplayHardwareID(raw) else {
+                    return .error("--display-hardware-id requires vendor:model:serial from --list (nonzero UInt32 values)")
+                }
+                config.displayHardwareID = id
+            case "--print-display-hardware-id": printDisplayHardwareID = true
 
             case "--invert-x":      config.invertX = true
             case "--invert-y":      config.invertY = true
@@ -64,6 +72,10 @@ enum ArgumentParser {
             }
         }
 
+        if printDisplayUUID && printDisplayHardwareID {
+            return .error("Choose only one --print-display-* action")
+        }
+        if printDisplayHardwareID { return .printDisplayHardwareID(config) }
         return printDisplayUUID ? .printDisplayUUID(config) : .run(config)
     }
 
@@ -75,9 +87,13 @@ enum ArgumentParser {
       m14ttouch [OPTIONS]
 
     OPTIONS:
-      --display N          Initial display index (default: 1); tracked by UUID thereafter
-      --display-uuid UUID  Stable display identity; overrides --display
+      --display N          Initial display index (default: 1); track UUID and hardware
+      --display-uuid UUID  Preferred display UUID; overrides --display
       --print-display-uuid Print selected display UUID and exit
+      --display-hardware-id V:M:S
+                           Physical vendor:model:serial identity for reconnect recovery
+      --print-display-hardware-id
+                           Print selected hardware identity, or blank if unavailable
       --auto-calibrate     Learn the touch range as you touch all four corners,
                            then save it for future runs
       --invert-x           Mirror the horizontal axis

@@ -58,6 +58,7 @@ final class HIDTouchDriver {
         self.calibration = initial
 
         let target = DisplayTarget(index: config.displayIndex, uuid: config.displayUUID,
+                                   hardwareID: config.displayHardwareID,
                                    displays: DisplayResolver.all())
         self.target = target
         self.mapper = CoordinateMapper(
@@ -72,7 +73,7 @@ final class HIDTouchDriver {
 
     /// Open the HID manager and begin listening. Blocks via the caller's run loop.
     func start() {
-        guard target.uuid != nil else {
+        guard target.uuid != nil || target.hardwareID != nil else {
             log("❌ Selected display is unavailable. Use --list to select the M14t.")
             exit(1)
         }
@@ -170,7 +171,7 @@ final class HIDTouchDriver {
             let bounds = display.bounds
             log("🖥️  Target \(display.uuid) [\(display.index)]: \(Int(bounds.width))×\(Int(bounds.height)) @ (\(Int(bounds.minX)),\(Int(bounds.minY)))")
         } else {
-            log("⏸️  Target display \(target.uuid ?? "unknown") disconnected; touch input paused")
+            log("⏸️  Target display \(target.uuid ?? target.hardwareID?.description ?? "unknown") unavailable or ambiguous; touch input paused")
         }
     }
 

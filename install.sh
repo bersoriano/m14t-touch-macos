@@ -148,7 +148,16 @@ swift build -c release
 # since indices change when the main display or connection order changes.
 BUILD_BINARY="$(pwd)/.build/release/m14ttouch"
 DISPLAY_UUID="$("$BUILD_BINARY" --display "$DISPLAY_INDEX" --print-display-uuid)"
+DISPLAY_HARDWARE_ID="$("$BUILD_BINARY" --display-uuid "$DISPLAY_UUID" --print-display-hardware-id)"
 DRIVER_ARGS=(--display-uuid "$DISPLAY_UUID")
+HARDWARE_ARGUMENT_XML=""
+if [[ -n "$DISPLAY_HARDWARE_ID" ]]; then
+    DRIVER_ARGS+=(--display-hardware-id "$DISPLAY_HARDWARE_ID")
+    HARDWARE_ARGUMENT_XML="        <string>--display-hardware-id</string>
+        <string>${DISPLAY_HARDWARE_ID}</string>"
+else
+    echo "⚠️ Display serial unavailable; reconnect recovery will use UUID only."
+fi
 if [[ "$STYLUS" == true ]]; then
     DRIVER_ARGS+=(--stylus)
 fi
@@ -209,6 +218,7 @@ if [[ "$AUTOSTART" == true ]]; then
         <string>${BINARY_XML}</string>
         <string>--display-uuid</string>
         <string>${DISPLAY_UUID}</string>
+${HARDWARE_ARGUMENT_XML}
 ${SCROLL_ARGUMENT_XML}
 ${STYLUS_ARGUMENT_XML}
         <string>--no-accessibility-prompt</string>
