@@ -100,6 +100,15 @@ struct TouchGestures {
         }
     }
 
+    /// A pen entering proximity only interrupts an existing finger gesture.
+    /// Idle fingers must be ready for their first tap after the pen leaves.
+    mutating func interruptForPen() -> [TouchAction] {
+        switch state {
+        case .idle, .suppressed: return []
+        default: return interrupt()
+        }
+    }
+
     mutating func cancel() -> [TouchAction] {
         defer { state = .idle }
         if case .dragging(_, let last) = state { return [.up(last)] }

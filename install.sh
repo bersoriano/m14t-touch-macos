@@ -22,6 +22,7 @@ SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
 AUTOSTART=false
 BINARY_UPDATED=false
 TWO_FINGER_SCROLL=false
+STYLUS=false
 SKIP_CALIBRATION=false
 
 if ! [[ "$DISPLAY_INDEX" =~ ^[0-9]+$ ]]; then
@@ -34,6 +35,7 @@ usage() {
 Usage:
   ./install.sh              Build and calibrate display index ${DISPLAY_INDEX}
   ./install.sh --autostart  Build, calibrate, and run automatically at login
+  Add --stylus             Enable Gen 1 active stylus
   Add --two-finger-scroll   Enable Gen 1 two-finger scrolling
   Add --skip-calibration    Keep existing ~/.m14ttouch.json
 
@@ -46,6 +48,9 @@ for arg in "$@"; do
     case "$arg" in
         --autostart)
             AUTOSTART=true
+            ;;
+        --stylus)
+            STYLUS=true
             ;;
         --two-finger-scroll)
             TWO_FINGER_SCROLL=true
@@ -68,6 +73,10 @@ done
 if [[ "$SKIP_CALIBRATION" == true && ! -s "$HOME/.m14ttouch.json" ]]; then
     echo "❌ No saved calibration; run without --skip-calibration first." >&2
     exit 1
+fi
+STYLUS_ARGUMENT_XML=""
+if [[ "$STYLUS" == true ]]; then
+    STYLUS_ARGUMENT_XML="        <string>--stylus</string>"
 fi
 SCROLL_ARGUMENT_XML=""
 if [[ "$TWO_FINGER_SCROLL" == true ]]; then
@@ -140,6 +149,9 @@ swift build -c release
 BUILD_BINARY="$(pwd)/.build/release/m14ttouch"
 DISPLAY_UUID="$("$BUILD_BINARY" --display "$DISPLAY_INDEX" --print-display-uuid)"
 DRIVER_ARGS=(--display-uuid "$DISPLAY_UUID")
+if [[ "$STYLUS" == true ]]; then
+    DRIVER_ARGS+=(--stylus)
+fi
 if [[ "$TWO_FINGER_SCROLL" == true ]]; then
     DRIVER_ARGS+=(--two-finger-scroll)
 fi
@@ -198,6 +210,7 @@ if [[ "$AUTOSTART" == true ]]; then
         <string>--display-uuid</string>
         <string>${DISPLAY_UUID}</string>
 ${SCROLL_ARGUMENT_XML}
+${STYLUS_ARGUMENT_XML}
         <string>--no-accessibility-prompt</string>
     </array>
     <key>RunAtLoad</key>

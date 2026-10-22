@@ -43,6 +43,8 @@ final class HIDTouchDriver {
     private var isTouching = false
     private var lastScreenPoint: CGPoint = .zero
     private var gestures = TouchGestures()
+    private var pen = PenInput()
+    private var penNearby = false
     private var frameContacts: [TouchContact] = []
     private var gestureTimer: Timer?
     private var scrollRemainder = CGPoint.zero
@@ -88,7 +90,7 @@ final class HIDTouchDriver {
             kIOHIDDeviceUsagePageKey: HID.Page.digitizer.rawValue,
             kIOHIDDeviceUsageKey:     HID.Digitizer.touchScreen.rawValue
         ].mapValues { Int($0) }
-        if config.twoFingerScroll {
+        if config.twoFingerScroll || config.stylus {
             // The raw report layout is specific to this Gen 1 controller.
             // Preserve the existing usage-based match for default mode.
             matching[kIOHIDVendorIDKey] = 0x2d1f
@@ -106,18 +108,21 @@ final class HIDTouchDriver {
             HIDTouchDriver.from(ctx).deviceRemoved()
         }, context)
 
-        if config.twoFingerScroll {
+        if config.twoFingerScroll || config.stylus {
             IOHIDManagerRegisterInputReportCallback(manager, { ctx, result, _, _, reportID, report, length in
                 guard result == kIOReturnSuccess else { return }
                 HIDTouchDriver.from(ctx).handleReport(reportID: reportID,
                     bytes: Array(UnsafeBufferPointer(start: report, count: length)))
             }, context)
+        }
+        if config.stylus { log("✏️  Stylus ON — hover, tip drawing, lower button right-click, upper button eraser") }
+        if config.twoFingerScroll {
             // A held finger must turn into a drag even if the HID device stops
             // sending unchanged frames. Only pending presses need timer work.
             gestureTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
                 guard let self, self.gestures.isPending else { return }
                 self.refreshDisplay()
-                guard self.target.current != nil, self.gestures.isPending else { return }
+                guard self.target.current != nil, !self.penNearby, self.gestures.isPending else { return }
                 self.emit(self.gestures.update(self.frameContacts, at: ProcessInfo.processInfo.systemUptime))
             }
             log("✌️  Two-finger scrolling ON — lift both fingers before starting a new gesture")
@@ -129,7 +134,12 @@ final class HIDTouchDriver {
 
         IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
 
-        let result = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        // In Windows mode macOS also translates the physical pen into tablet
+        // and mouse events. Those can interrupt our mapped strokes. Stylus
+        // mode matches only the Gen 1 VID/PID above, so exclusive access affects
+        // this digitizer, never an unrelated mouse, keyboard or tablet.
+        let openOptions = config.stylus ? kIOHIDOptionsTypeSeizeDevice : kIOHIDOptionsTypeNone
+        let result = IOHIDManagerOpen(manager, IOOptionBits(openOptions))
         if result == kIOReturnSuccess {
             log("✅ Listening for touch device…")
         } else {
@@ -166,6 +176,7 @@ final class HIDTouchDriver {
 
     private func refreshDisplay() {
         guard target.refresh(DisplayResolver.all()) else { return }
+        emitter.postPen(pen.interrupt())
         // A pending press or scroll anchor belongs to the old coordinate space.
         // An interrupted gesture must lift completely before it can restart.
         if !frameContacts.isEmpty { emit(gestures.interrupt()) }
@@ -193,6 +204,8 @@ final class HIDTouchDriver {
 
     private func deviceRemoved() {
         log("🔌 Touch device disconnected")
+        emitter.postPen(pen.cancel())
+        penNearby = false
         frameContacts = []
         emit(gestures.cancel())
         // Release any held button so the cursor doesn't get stuck pressed.
@@ -258,9 +271,12 @@ final class HIDTouchDriver {
     // MARK: - Input Handling
 
     private func handleReport(reportID: UInt32, bytes: [UInt8]) {
-        // Both digitizer interfaces enumerate. Only report 0x0c carries the
-        // five simultaneous Gen 1 contacts; ignore the pen/secondary interface.
-        guard reportID == 0x0c else { return }
+        if reportID == 6 || reportID == 11 {
+            if config.stylus { handlePen(bytes) }
+            return
+        }
+        // Secondary touch interface remains ignored; only 0x0c has complete frames.
+        guard config.twoFingerScroll, reportID == 0x0c else { return }
         refreshDisplay()
         guard let rawContacts = M14tReport.decode(bytes) else {
             if config.debugMode { log("HID rejected report 0x0C length=\(bytes.count) bytes=\(bytes.prefix(12))") }
@@ -273,7 +289,7 @@ final class HIDTouchDriver {
                 "id=\($0.id) x=\(Int($0.point.x)) y=\(Int($0.point.y))"
             }.joined(separator: " | "))
         }
-        guard target.current != nil else {
+        guard target.current != nil, !penNearby else {
             frameContacts = []
             emit(gestures.update(rawContacts, at: ProcessInfo.processInfo.systemUptime, inputEnabled: false))
             return
@@ -285,6 +301,36 @@ final class HIDTouchDriver {
             TouchContact(id: $0.id, point: mapper.map(rawX: $0.point.x, rawY: $0.point.y))
         }
         emit(gestures.update(frameContacts, at: ProcessInfo.processInfo.systemUptime))
+    }
+
+    private func interruptFingers() {
+        frameContacts = []
+        scrollRemainder = .zero
+        emit(gestures.interruptForPen())
+        if isTouching {
+            emitter.post(.leftMouseUp, at: lastScreenPoint)
+            isTouching = false
+            waitForTouchRelease = true
+        }
+    }
+
+    private func handlePen(_ bytes: [UInt8]) {
+        refreshDisplay()
+        guard let sample = PenReport.decode(bytes) else {
+            penNearby = false
+            emitter.postPen(pen.interrupt())
+            interruptFingers()
+            if config.debugMode { log("PEN rejected report length=\(bytes.count)") }
+            return
+        }
+        if sample.inRange && !penNearby { interruptFingers() }
+        penNearby = sample.inRange
+        let point = sample.point(in: mapper.displayBounds, invertX: config.invertX, invertY: config.invertY)
+        let actions = pen.update(sample, at: point, inputEnabled: target.current != nil)
+        emitter.postPen(actions)
+        if config.debugMode {
+            log("PEN range=\(sample.inRange) tip=\(sample.touching) pressure=\(sample.pressure) raw=\(sample.rawPoint) point=\(point) eventTypes=\(actions.compactMap { $0.eventType?.rawValue })")
+        }
     }
 
     private func emit(_ actions: [TouchAction]) {
@@ -312,10 +358,13 @@ final class HIDTouchDriver {
     private func handle(_ value: IOHIDValue) {
         refreshDisplay()
         let element = IOHIDValueGetElement(value)
+        // Pen elements also arrive in legacy mode. Never treat them as fingers.
+        let reportID = IOHIDElementGetReportID(element)
+        guard reportID != 6 && reportID != 11 else { return }
         let page    = IOHIDElementGetUsagePage(element)
         let usage   = IOHIDElementGetUsage(element)
         let intVal  = IOHIDValueGetIntegerValue(value)
-        guard target.current != nil else {
+        guard target.current != nil, !penNearby else {
             if page == HID.Page.digitizer.rawValue && usage == HID.Digitizer.tipSwitch.rawValue {
                 waitForTouchRelease = intVal != 0
             }

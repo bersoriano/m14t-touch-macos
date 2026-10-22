@@ -5,6 +5,7 @@ import CoreGraphics
 
 /// Shared scenarios for XCTest and the Command Line Tools-only runner.
 func runGestureReplayChecks(_ check: (Bool, String) -> Void) {
+    runPenChecks(check)
     func contact(_ id: Int, _ x: Double, _ y: Double) -> TouchContact {
         TouchContact(id: id, point: CGPoint(x: x, y: y))
     }
@@ -188,4 +189,95 @@ func runGestureReplayChecks(_ check: (Bool, String) -> Void) {
     _ = gesture.update([first, second], at: 1, inputEnabled: false)
     check(gesture.update([first, second], at: 1.1).isEmpty, "fingers held through reconnect remain suppressed until lift")
 
+}
+
+func runPenChecks(_ check: (Bool, String) -> Void) {
+    func packet(_ flags: UInt8 = 0x20, id: UInt8 = 6, x: UInt16 = 15465, y: UInt16 = 8700, pressure: UInt16 = 2048) -> [UInt8] {
+        // Both input reports are 18 bytes. Report 0x0B's 63-byte feature
+        // payload is a different report type, not appended pen input.
+        var bytes = [UInt8](repeating: 0, count: 18)
+        bytes[0] = id; bytes[1] = flags
+        for (offset, value) in [(2,x), (4,y), (6,pressure)] { bytes[offset] = UInt8(value & 255); bytes[offset+1] = UInt8(value >> 8) }
+        bytes[16] = UInt8(bitPattern: -45); bytes[17] = 90
+        return bytes
+    }
+    let hover = PenReport.decode(packet())!
+    let down = PenReport.decode(packet(0x21))!
+    let gone = PenReport.decode(packet(0))!
+    let right = PenReport.decode(packet(0x22))!
+    let eraser = PenReport.decode(packet(0x34))!
+    check(hover.inRange && !hover.touching, "pen hover decoded separately from tip contact")
+    check(down.touching && down.pressure == 2048.0/4095, "pen pressure retains hardware precision")
+    check(hover.tilt == CGPoint(x: -0.5, y: 1), "pen signed tilt decoded")
+    check(eraser.touching && eraser.eraser, "eraser contact works without tip-switch bit")
+    check(right.barrel, "lower pen button decoded")
+    check(PenReport.decode(packet(0x21, id: 11)) == down, "vendor pen report uses same layout")
+    check(PenReport.decode(packet(0x21, id: 11) + [UInt8](repeating: 0, count: 63)) == nil, "feature payload is not part of pen input")
+    // Captured in Windows mode after USB reconnect; pen serial fields removed.
+    let capturedTip: [UInt8] = [0x06, 0x21, 0x4d, 0x4a, 0xc3, 0x2f, 0x60, 0x05,
+                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    let captured = PenReport.decode(capturedTip)
+    check(captured?.touching == true && captured?.inRange == true &&
+          captured?.rawPoint == CGPoint(x: 19021, y: 12227) &&
+          captured?.pressure == 1376.0/4095, "captured Windows-mode tip report decodes position and pressure")
+    check(PenReport.decode(Array(packet().prefix(17))) == nil, "truncated pen packet rejected")
+    check(PenReport.decode(packet(id: 12)) == nil, "finger report cannot become pen event")
+    check(PenReport.decode(packet(x: 30932)) == nil, "out-of-range pen coordinate rejected")
+    check(PenReport.decode(packet(0x21, pressure: 4096)) == nil, "invalid pressure rejected")
+    let exitWithButton = PenReport.decode(packet(0x02, x: 65535, y: 65535, pressure: 65535))
+    check(exitWithButton != nil && !exitWithButton!.inRange, "range exit tolerates stale button and coordinate fields")
+    var fingers = TouchGestures()
+    check(fingers.interruptForPen().isEmpty, "pen hover leaves idle fingers ready")
+    let finger = TouchContact(id: 1, point: CGPoint(x: 100, y: 100))
+    _ = fingers.update([finger], at: 0)
+    check(fingers.update([], at: 0.05) == [.down(finger.point), .up(finger.point)], "first finger tap after idle pen handoff works")
+    _ = fingers.update([finger], at: 1)
+    check(fingers.interruptForPen().isEmpty, "pen cancels delayed finger click")
+    check(fingers.update([], at: 1.05).isEmpty, "finger lift after pen takeover cannot click")
+    _ = fingers.update([finger], at: 2)
+    _ = fingers.update([finger], at: 2.13)
+    check(fingers.interruptForPen() == [.up(finger.point)], "pen takeover releases active finger drag")
+    let bounds = CGRect(x: -1600, y: 900, width: 1600, height: 900)
+    let corner = PenReport.decode(packet(x: 30931, y: 17399))!
+    check(corner.point(in: bounds, invertX: false, invertY: false) == CGPoint(x: -1, y: 1799), "pen edge stays inside target display")
+    check(corner.point(in: bounds, invertX: true, invertY: true) == bounds.origin, "pen inversion preserves target origin")
+
+    let p = CGPoint(x: -800, y: 1300)
+    var pen = PenInput()
+    let entering = pen.update(hover, at: p)
+    check(entering.first == .proximity(p, entering: true, eraser: false), "hover enters tablet proximity")
+    check(entering.last?.eventType == .mouseMoved, "hover moves pointer without clicking")
+    check(pen.update(down, at: p).map(\.eventType) == [.leftMouseDown], "pen tip clicks immediately")
+    check(pen.update(down, at: p).map(\.eventType) == [.leftMouseDragged], "pen contact sends drawing samples")
+    check(pen.update(hover, at: p).first?.eventType == .leftMouseUp, "tip lift releases pen button")
+    check(pen.update(right, at: p).last?.eventType == .rightMouseDown, "barrel starts right click")
+    check(pen.update(gone, at: .zero).first?.eventType == .rightMouseUp, "pen leaving range releases at last valid point")
+    check(!pen.isInRange, "out-of-range clears pen proximity")
+    _ = pen.update(down, at: p)
+    check(pen.interrupt().first?.eventType == .leftMouseUp, "layout change or malformed packet releases pen")
+    check(pen.update(down, at: p).isEmpty, "interrupted pen stroke cannot resume until lift")
+    _ = pen.update(hover, at: p)
+    check(pen.update(down, at: p).last?.eventType == .leftMouseDown, "pen resumes after hover lift")
+    _ = pen.update(gone, at: p, inputEnabled: false)
+    check(pen.update(down, at: p).last?.eventType == .leftMouseDown, "release while display absent permits next pen stroke")
+    check(pen.cancel().first?.eventType == .leftMouseUp && pen.cancel().isEmpty, "disconnect safely releases pen once")
+    let eraseEvents = pen.update(eraser, at: p)
+    check(eraseEvents.first == .proximity(p, entering: true, eraser: true), "top button advertises eraser proximity")
+    let event = MouseEmitter().makePenEvent(eraseEvents.last!)!
+    check(abs(event.getDoubleValueField(.tabletEventPointPressure) - eraser.pressure) < 1.0/65535, "tablet event carries pressure")
+    check(abs(event.getDoubleValueField(.tabletEventTiltX) + 0.5) < 1.0/32767, "tablet event carries tilt")
+    check(event.getIntegerValueField(.mouseEventSubtype) == 1, "pen events marked as tablet points")
+    for (type, button, mask): (CGEventType, CGMouseButton, Int64) in [
+        (.leftMouseDown, .left, 1), (.leftMouseDragged, .left, 1),
+        (.rightMouseDown, .right, 2), (.rightMouseDragged, .right, 2),
+        (.leftMouseUp, .left, 0), (.rightMouseUp, .right, 0), (.mouseMoved, .left, 0)
+    ] {
+        let sample = MouseEmitter().makePenEvent(.pointer(type: type, button: button,
+            point: p, pressure: mask == 1 ? 0.5 : 0, tilt: .zero))!
+        check(sample.getIntegerValueField(.tabletEventPointButtons) == mask,
+              "tablet button mask matches mouse event \(type.rawValue)")
+    }
+    if case .run(let config) = ArgumentParser.parse(["--stylus", "--two-finger-scroll"]) {
+        check(config.stylus && config.twoFingerScroll, "pen and scrolling can run together")
+    } else { check(false, "CLI accepts stylus mode") }
 }

@@ -7,11 +7,12 @@
 [![Swift](https://img.shields.io/badge/swift-5.9-orange)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-macOS recognises the M14t as an external display but silently ignores its USB
-HID touch interface — so the screen works, but touch does nothing. The usual fix
-is commercial drivers that costs **~$171** for a single license. This is
-a focused open-source alternative that does one thing well: **turns a finger
-touch into a mouse click**, entirely in user space using Apple's public APIs.
+macOS recognises the M14t as an external display but does not provide its finger
+touch controls. This driver maps finger taps and drags to mouse input, with
+opt-in two-finger scrolling and active pen support for the Gen 1 M14t. It runs
+entirely in user space using Apple's public APIs.
+
+This fork builds on [talesmousinho/m14t-touch-macos](https://github.com/talesmousinho/m14t-touch-macos).
 
 No kernel extension. No system extension. No paid license.
 
@@ -73,6 +74,8 @@ matters, unit-testable:
 | `TouchConfig.swift` | Runtime options value type |
 | `HIDTouchDriver.swift` | IOKit orchestration, calibration and event dispatch |
 | `M14tReport.swift` | Gen 1 report decoding with separate contact IDs |
+| `PenReport.swift` | Gen 1 pen report decoding and independent coordinate mapping |
+| `PenInput.swift` | Pen hover, contact, button and proximity state |
 | `TouchGestures.swift` | Pure tap, drag and two-finger scroll state machine |
 | `CoordinateMapper.swift` | **Pure** raw→screen math (fully tested) |
 | `Calibration.swift` | Calibration model + JSON persistence |
@@ -96,7 +99,7 @@ dependencies, so they're covered by `swift test` without a connected device.
 ## Quick start
 
 ```bash
-git clone https://github.com/talesmousinho/m14t-touch-macos.git
+git clone https://github.com/bersoriano/m14t-touch-macos.git
 cd m14t-touch-macos
 
 # 1. Build
@@ -144,6 +147,9 @@ index (for example, if it is now display 0):
 DISPLAY_INDEX=0 ./install.sh --autostart --two-finger-scroll --skip-calibration
 ```
 
+Include `--stylus` in reinstall commands if you use the active pen; installer
+options replace the previous login agent's options.
+
 For manual launches, use `--display-uuid UUID` with the identity printed by
 `--list`. It takes precedence over `--display`. An unavailable UUID waits for that
 monitor; an invalid index exits instead of falling back to the main display.
@@ -152,9 +158,10 @@ monitor; an invalid index exits instead of falling back to the main display.
 ## Two-finger scrolling (Gen 1, opt-in)
 
 For the original 1920×1080 M14t with USB controller `2d1f:524c`, set the monitor's
-OSD **Touch Support** to **Android/Chrome** and turn **Auto rotation** off while
-calibrating. The report parser is specific to this hardware and mode; Gen 2 and
-other digitizers have not been validated.
+OSD **Touch Support** to **Android/Chrome** for finger-only use, or **Windows**
+when using the active pen. Turn **Auto rotation** off while calibrating. The
+report parser is specific to this hardware; Gen 2 and other digitizers have not
+been validated.
 
 ```bash
 # Use the saved calibration; add --debug to inspect contacts and gestures.
@@ -176,11 +183,13 @@ Place both fingers together to scroll without an initial click. If a second
 finger arrives after a drag has already begun, the driver releases that drag
 before scrolling. Content follows finger motion, with scroll events anchored to
 the gesture's starting point. Lift both fingers before beginning another gesture.
-Pinch zoom, two-finger right-click, pen input and momentum are not supported.
+Pinch zoom, two-finger right-click and momentum are not supported. Add
+`--stylus` for Gen 1 active pen support (see below).
 
 This mode decodes complete 40-byte `0x0c` reports containing five contact slots,
 using each contact's ID and confidence bit. It ignores secondary digitizer and
-pen reports, and releases any held mouse button on disconnection or shutdown.
+pen reports unless `--stylus` is enabled, and releases any held mouse button on
+disconnection or shutdown.
 
 Run only one copy at a time. Before starting a manual debug session, stop the
 login agent:
@@ -208,6 +217,58 @@ input processes.
 
 ---
 
+## Active stylus (Gen 1, opt-in)
+
+Set the monitor's physical OSD **Touch Support** to **Windows**. Close the OSD,
+then disconnect and reconnect the USB-C connection to the Mac. Wait for the
+digitizer to reconnect before testing. On the tested Gen 1 panel, Android/Chrome
+delivered finger reports but no active-pen reports; Windows mode delivered pen
+hover, tip pressure, eraser and range-exit reports after reconnection. A pen
+working in the monitor's own OSD does not prove that it is reporting to the host.
+
+```sh
+.build/release/m14ttouch --display 1 --two-finger-scroll --stylus
+DISPLAY_INDEX=1 ./install.sh --autostart --two-finger-scroll --stylus --skip-calibration
+```
+
+Choose the M14t's current index from `--list`. Hover moves the pointer; tip
+contact clicks or draws immediately. The lower barrel button holds right-click;
+the upper button signals a tablet eraser to apps that support it. Pressure and
+tilt are passed as native tablet fields, but application support varies.
+Finger gestures are suppressed while the pen is near the glass. Lift resting
+fingers before switching back to touch.
+
+Stylus mode takes exclusive access to the matched `2d1f:524c` digitizer. This
+prevents macOS from injecting competing native pen events between mapped drag
+events, which otherwise interrupt continuous drawing in Apple Notes. Other
+input devices are unaffected; stopping the process releases the digitizer.
+
+Pen coordinates use the Gen 1 digitizer's separate factory range. Finger
+calibration and any personal touch offset remain unchanged. Both input types
+follow the same display UUID and layout changes; interrupted pen strokes must
+lift before resuming. Pen packets do not participate in finger auto-calibration.
+
+The report layout and native tablet emission are adapted from this repository's
+upstream `HIDReportParser` and `MouseEmitter`, checked against the connected
+Gen 1 USB descriptor (`0x06` and `0x0B`: 18-byte input reports). Replay tests cover
+parsing, pressure/tilt fields, held tablet-button state, contact transitions and
+interruption. On a Gen 1 M14t in Windows mode with macOS 27, physical testing
+confirmed pen hover/tap, window dragging, continuous Apple Notes drawing, and
+finger tap/two-finger scrolling after moving the pen away. Pressure-sensitive
+brush response and eraser behavior still depend on the application and have not
+been validated in that test.
+
+Changing the USB connection can change macOS's display UUID. If input stops
+after reconnection, use `--list` to identify the M14t's current index, then rerun
+the installer with that `DISPLAY_INDEX` and `--skip-calibration` to retain the
+saved finger calibration. A display that is absent stays paused rather than
+redirecting input to another monitor.
+
+The supplied Lenovo Digital Pen needs an AAAA battery, with its positive end
+pointing toward the tip. If `--debug` shows finger frames but no `PEN` lines,
+verify Windows mode and USB reconnection first, then check the battery.
+Recalibrating cannot fix missing reports. See [Lenovo battery instructions](https://download.lenovo.com/pccbbs/pubs/yoga_7_14_16/html_en/EN/InstallTheAAAABattery.html).
+
 ## Permissions
 
 macOS gates the two things this driver needs. Grant both once:
@@ -230,6 +291,8 @@ LaunchAgent. Use the current M14t display index (on a Mac where it is display 0)
 ```bash
 DISPLAY_INDEX=0 ./install.sh --autostart --two-finger-scroll --skip-calibration
 ```
+
+Include `--stylus` when retaining active pen support.
 
 The installer checks that the LaunchAgent stays running and exits with an error
 if startup fails. Permission failures do not cause a repeated restart loop. After
@@ -291,6 +354,7 @@ m14ttouch --display 1 --invert-y              # fix a flipped axis
 --y-min / --y-max    Manual raw Y bounds
 --debug              Print every HID event and resulting action
 --two-finger-scroll  Enable Gen 1 two-finger scrolling
+--stylus             Enable Gen 1 active pen input
 --no-accessibility-prompt
                      Suppress the Accessibility prompt for LaunchAgents
 --list               List connected displays and exit
@@ -316,9 +380,11 @@ bash test-gestures.sh
 ```
 
 Replay coverage includes stable display selection, rearrangement/resizing, reconnect
-recovery, tap/drag timing, contact IDs and slot order, both scroll
-axes, finger lifts, malformed reports, palm filtering, and cancellation. Real
-hardware validation is still needed to verify event delivery and app behavior.
+recovery, tap/drag timing, contact IDs and slot order, both scroll axes, finger
+lifts, malformed reports, palm filtering, pen pressure/tilt, held tablet-button
+state, and cancellation. The runner currently passes 110 checks. Replay tests
+cannot establish real event delivery or app behavior; the physical validation
+above records what was tested on the connected Gen 1 panel.
 
 ---
 
@@ -335,6 +401,9 @@ hardware validation is still needed to verify event delivery and app behavior.
 | Autostart installs but driver is not running | Remove/re-add **Accessibility** for `~/Applications/M14t Touch.app`, then run `launchctl kickstart -k "gui/$(id -u)/com.talesfonseca.m14ttouch"` |
 | Works in Terminal, stops after closing it | Use `./install.sh --autostart` |
 | Cursor jumps or windows flicker | Stop extra manual copies; run only one driver instance |
+| Pen works in monitor menu but not on Mac | Set OSD Touch Support to **Windows**, close the menu, reconnect USB-C, and run with `--stylus` |
+| Notes draws dots instead of continuous pen strokes | Use the current `--stylus` build: it holds the tablet button during drags and takes exclusive M14t access to prevent competing native events |
+| Input stops after changing USB connection | Check `--list`; the display UUID may have changed. Reinstall with the current M14t `DISPLAY_INDEX`, `--stylus --two-finger-scroll --skip-calibration` |
 
 ---
 

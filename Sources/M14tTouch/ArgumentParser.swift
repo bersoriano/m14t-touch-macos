@@ -49,6 +49,7 @@ enum ArgumentParser {
             case "--invert-x":      config.invertX = true
             case "--invert-y":      config.invertY = true
             case "--debug":         config.debugMode = true
+            case "--stylus": config.stylus = true
             case "--two-finger-scroll": config.twoFingerScroll = true
             case "--auto-calibrate": config.autoCalibrate = true
             case "--no-accessibility-prompt": config.promptForAccessibility = false
@@ -86,6 +87,7 @@ enum ArgumentParser {
       --y-min N            Manual raw Y minimum
       --y-max N            Manual raw Y maximum
       --debug              Print every HID event and resulting action
+      --stylus             Gen 1: pen hover, clicks, pressure and tilt
       --two-finger-scroll  Gen 1: one finger taps/drags, two fingers scroll
       --no-accessibility-prompt
                Do not show the Accessibility prompt; useful for LaunchAgents
