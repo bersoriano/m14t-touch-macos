@@ -116,8 +116,9 @@ Or use the helper script, which builds and runs calibration interactively in the
 terminal. Touch all four corners, then press Enter; the installer stops
 calibration and returns the prompt. With `--autostart`, the driver then runs
 silently via LaunchAgent, discards normal output, and writes errors to
-`/tmp/m14ttouch.err.log`. The script installs the driver at
-`~/.local/bin/m14ttouch` so macOS permissions keep pointing at a stable path:
+`/tmp/m14ttouch.err.log`. The script installs a signed background app at `~/Applications/M14t Touch.app`
+and a command-line symlink at `~/.local/bin/m14ttouch`. The LaunchAgent runs the
+executable inside that app so you can grant permissions to a visible app:
 
 ```bash
 ./install.sh              # build + calibrate
@@ -216,19 +217,38 @@ macOS gates the two things this driver needs. Grant both once:
 | **Input Monitoring** | Read raw HID touch data | System Settings → Privacy & Security → Input Monitoring |
 | **Accessibility** | Post cursor / click events | System Settings → Privacy & Security → Accessibility |
 
-Add your terminal app for interactive runs, and add `~/.local/bin/m14ttouch` for
-LaunchAgent/autostart runs. If `m14ttouch` is already listed but autostart still
-fails, remove that entry and add `~/.local/bin/m14ttouch` again, then restart the
-existing LaunchAgent with:
+For installer-based runs, add **`~/Applications/M14t Touch.app`** to both lists.
+In the file chooser, press **Command-Shift-G** and enter `~/Applications/`.
+Terminal or Codex permission alone can make an interactive launch work while the
+login agent remains denied.
+
+When upgrading from the old standalone binary installation, remove the old
+`m14ttouch` permission entry and approve **M14t Touch.app**. Calibration is retained.
+The installer replaces the old CLI file with a symlink and updates the existing
+LaunchAgent. Use the current M14t display index (on a Mac where it is display 0):
+
+```bash
+DISPLAY_INDEX=0 ./install.sh --autostart --two-finger-scroll --skip-calibration
+```
+
+The installer checks that the LaunchAgent stays running and exits with an error
+if startup fails. Permission failures do not cause a repeated restart loop. After
+granting permissions, restart the installed agent without rebuilding:
 
 ```bash
 launchctl kickstart -k "gui/$(id -u)/com.talesfonseca.m14ttouch"
 ```
 
 The driver prompts for Accessibility automatically on first interactive run.
-On the tested macOS 27 system, this permission appears as **Device Control and
-Data Access**. After rebuilding, a stale entry can remain enabled but still deny
-access; remove it and re-add the installed binary before restarting the agent.
+On some macOS versions, this permission appears as **Device Control and Data
+Access**. An enabled stale entry can still deny access; remove it and re-add the
+installed app before restarting the agent.
+
+Local installations use ad-hoc signing by default. Reinstalling an unchanged build
+preserves its signature; changed builds may require renewed permission. If you
+have a signing certificate, set `SIGNING_IDENTITY` to its name when installing to
+sign updates with the same identity. An app bundle or ad-hoc signature does not
+automatically grant permissions or guarantee grants survive code changes.
 
 ---
 
@@ -312,7 +332,7 @@ hardware validation is still needed to verify event delivery and app behavior.
 | Cursor doesn't move at all | Grant **Accessibility** permission |
 | `--debug` shows nothing | Grant **Input Monitoring** permission |
 | Accessibility prompt repeats | Re-run `./install.sh --autostart`; the LaunchAgent should use `--no-accessibility-prompt` |
-| Autostart installs but driver is not running | Remove/re-add **Accessibility** for `~/.local/bin/m14ttouch`, then run `launchctl kickstart -k "gui/$(id -u)/com.talesfonseca.m14ttouch"` |
+| Autostart installs but driver is not running | Remove/re-add **Accessibility** for `~/Applications/M14t Touch.app`, then run `launchctl kickstart -k "gui/$(id -u)/com.talesfonseca.m14ttouch"` |
 | Works in Terminal, stops after closing it | Use `./install.sh --autostart` |
 | Cursor jumps or windows flicker | Stop extra manual copies; run only one driver instance |
 

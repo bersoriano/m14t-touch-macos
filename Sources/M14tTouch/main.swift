@@ -35,7 +35,8 @@ func ensureAccessibilityOrExit(prompt: Bool) {
     ⚠️  Accessibility permission is required to move the cursor.
 
         System Settings → Privacy & Security → Accessibility
-        → enable the terminal app (or the m14ttouch binary), then relaunch.
+        → add and enable ~/Applications/M14t Touch.app, then relaunch.
+        A terminal app's permission does not authorize the login agent.
 
     """
     fputs(message, stderr)
