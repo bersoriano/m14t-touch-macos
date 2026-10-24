@@ -10,6 +10,8 @@
     <string>M14t Touch</string>
     <key>CFBundleExecutable</key>
     <string>m14ttouch</string>
+    <key>CFBundleIconFile</key>
+    <string>M14tTouch</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>

@@ -16,6 +16,7 @@ INSTALL_DIR="$HOME/.local/bin"
 APP="$HOME/Applications/M14t Touch.app"
 INSTALL_BINARY="$APP/Contents/MacOS/m14ttouch"
 CLI_BINARY="$INSTALL_DIR/m14ttouch"
+ICON_SOURCE="Resources/Icons/M14tTouch-v2/M14tTouch.icns"
 # A real signing identity can preserve grants across rebuilds. Ad-hoc signing
 # gives local installs a bundle identity, but changed builds may need approval.
 SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
@@ -190,6 +191,7 @@ SOURCE_HASH="${SOURCE_HASH%% *}"
 mkdir -p "$INSTALL_DIR" "$APP/Contents/MacOS" "$APP/Contents/Resources"
 if [[ -f "$INSTALL_BINARY" ]] && [[ "$(cat "$APP/Contents/Resources/build-sha256" 2>/dev/null)" == "$SOURCE_HASH" ]] \
     && cmp -s Resources/Info.plist "$APP/Contents/Info.plist" \
+    && cmp -s "$ICON_SOURCE" "$APP/Contents/Resources/M14tTouch.icns" \
     && [[ "$(cat "$APP/Contents/Resources/signing-identity" 2>/dev/null)" == "$SIGNING_IDENTITY" ]] \
     && codesign --verify "$APP" 2>/dev/null; then
     echo "✅ Installed app is unchanged; keeping its signature."
@@ -197,6 +199,7 @@ else
     cp "$BUILD_BINARY" "$INSTALL_BINARY"
     printf '%s' "$SOURCE_HASH" > "$APP/Contents/Resources/build-sha256"
     cp Resources/Info.plist "$APP/Contents/Info.plist"
+    cp "$ICON_SOURCE" "$APP/Contents/Resources/M14tTouch.icns"
     printf '%s' "$SIGNING_IDENTITY" > "$APP/Contents/Resources/signing-identity"
     chmod +x "$INSTALL_BINARY"
     codesign --force --sign "$SIGNING_IDENTITY" --identifier "$LABEL" "$APP"

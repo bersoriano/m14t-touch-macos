@@ -129,6 +129,9 @@ executable inside that app so you can grant permissions to a visible app:
 ./install.sh --autostart  # build + calibrate + run automatically at login
 ```
 
+The installer bundles `Resources/Icons/M14tTouch-v2/M14tTouch.icns` before signing.
+An icon change triggers a signed bundle update even when the executable is unchanged.
+
 ---
 
 ## Keeping touch on the M14t after display changes
