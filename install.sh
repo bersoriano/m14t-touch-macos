@@ -22,6 +22,7 @@ SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
 AUTOSTART=false
 BINARY_UPDATED=false
 TWO_FINGER_SCROLL=false
+PINCH_ZOOM=false
 STYLUS=false
 SKIP_CALIBRATION=false
 
@@ -37,6 +38,7 @@ Usage:
   ./install.sh --autostart  Build, calibrate, and run automatically at login
   Add --stylus             Enable Gen 1 active stylus
   Add --two-finger-scroll   Enable Gen 1 two-finger scrolling
+  Add --pinch-zoom          Enable pinch zoom and two-finger scrolling
   Add --skip-calibration    Keep existing ~/.m14ttouch.json
 
 Set DISPLAY_INDEX=N to target a different display.
@@ -53,6 +55,10 @@ for arg in "$@"; do
             STYLUS=true
             ;;
         --two-finger-scroll)
+            TWO_FINGER_SCROLL=true
+            ;;
+        --pinch-zoom)
+            PINCH_ZOOM=true
             TWO_FINGER_SCROLL=true
             ;;
         --skip-calibration)
@@ -81,6 +87,11 @@ fi
 SCROLL_ARGUMENT_XML=""
 if [[ "$TWO_FINGER_SCROLL" == true ]]; then
     SCROLL_ARGUMENT_XML="        <string>--two-finger-scroll</string>"
+fi
+
+PINCH_ARGUMENT_XML=""
+if [[ "$PINCH_ZOOM" == true ]]; then
+    PINCH_ARGUMENT_XML="        <string>--pinch-zoom</string>"
 fi
 
 calibration_pid=""
@@ -165,6 +176,10 @@ if [[ "$TWO_FINGER_SCROLL" == true ]]; then
     DRIVER_ARGS+=(--two-finger-scroll)
 fi
 
+if [[ "$PINCH_ZOOM" == true ]]; then
+    DRIVER_ARGS+=(--pinch-zoom)
+fi
+
 # Do not run the old login agent alongside the calibration process.
 if [[ "$AUTOSTART" == true ]]; then
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
@@ -220,6 +235,7 @@ if [[ "$AUTOSTART" == true ]]; then
         <string>${DISPLAY_UUID}</string>
 ${HARDWARE_ARGUMENT_XML}
 ${SCROLL_ARGUMENT_XML}
+${PINCH_ARGUMENT_XML}
 ${STYLUS_ARGUMENT_XML}
         <string>--no-accessibility-prompt</string>
     </array>

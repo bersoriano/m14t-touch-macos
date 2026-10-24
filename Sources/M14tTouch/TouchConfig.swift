@@ -28,6 +28,9 @@ struct TouchConfig {
     /// Opt in to Gen 1 report-based two-finger scrolling.
     var twoFingerScroll: Bool = false
 
+    /// Opt in to native pinch zoom alongside two-finger scrolling.
+    var pinchZoom: Bool = false
+
     /// Opt in to Gen 1 active pen reports and palm suppression.
     var stylus: Bool = false
 

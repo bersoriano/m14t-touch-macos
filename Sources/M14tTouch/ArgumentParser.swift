@@ -59,6 +59,9 @@ enum ArgumentParser {
             case "--debug":         config.debugMode = true
             case "--stylus": config.stylus = true
             case "--two-finger-scroll": config.twoFingerScroll = true
+            case "--pinch-zoom":
+                config.pinchZoom = true
+                config.twoFingerScroll = true
             case "--auto-calibrate": config.autoCalibrate = true
             case "--no-accessibility-prompt": config.promptForAccessibility = false
 
@@ -105,6 +108,7 @@ enum ArgumentParser {
       --debug              Print every HID event and resulting action
       --stylus             Gen 1: pen hover, clicks, pressure and tilt
       --two-finger-scroll  Gen 1: one finger taps/drags, two fingers scroll
+      --pinch-zoom         Gen 1: add pinch zoom; also enables two-finger scrolling
       --no-accessibility-prompt
                Do not show the Accessibility prompt; useful for LaunchAgents
       --list               List connected displays and exit

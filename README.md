@@ -9,8 +9,9 @@
 
 macOS recognises the M14t as an external display but does not provide its finger
 touch controls. This driver maps finger taps and drags to mouse input, with
-opt-in two-finger scrolling and active pen support for the Gen 1 M14t. It runs
-entirely in user space using Apple's public APIs.
+opt-in two-finger scrolling, pinch zoom and active pen support for the Gen 1 M14t.
+It runs entirely in user space. Pinch zoom uses undocumented macOS gesture
+event fields; other input uses Apple's public APIs.
 
 This fork builds on [talesmousinho/m14t-touch-macos](https://github.com/talesmousinho/m14t-touch-macos).
 
@@ -190,8 +191,8 @@ Place both fingers together to scroll without an initial click. If a second
 finger arrives after a drag has already begun, the driver releases that drag
 before scrolling. Content follows finger motion, with scroll events anchored to
 the gesture's starting point. Lift both fingers before beginning another gesture.
-Pinch zoom, two-finger right-click and momentum are not supported. Add
-`--stylus` for Gen 1 active pen support (see below).
+Add `--pinch-zoom` for zoom gestures and `--stylus` for Gen 1 active pen support
+(see below). Two-finger right-click and momentum are not supported.
 
 This mode decodes complete 40-byte `0x0c` reports containing five contact slots,
 using each contact's ID and confidence bit. It ignores secondary digitizer and
@@ -223,6 +224,40 @@ agent before updating the binary or starting calibration, avoiding competing
 input processes.
 
 ---
+
+## Pinch zoom (Gen 1, opt-in)
+
+`--pinch-zoom` enables two-finger scrolling plus native magnification events.
+Spread two fingers to zoom in; bring them together to zoom out. Place both
+fingers before moving. Small initial jitter is ignored, then the first clear
+motion selects pinch or scroll until both fingers lift. Zoom stays anchored at
+the pair's starting midpoint on the M14t. A pinch never clicks on release.
+
+```bash
+# Find the current M14t index with --list; replace 1 if needed.
+DISPLAY_INDEX=1 ./install.sh --autostart --pinch-zoom --stylus --skip-calibration
+```
+
+This preserves saved finger calibration and enables zoom at login. Keep
+**Windows** OSD mode when using `--stylus`. Existing Accessibility and Input
+Monitoring permissions still apply to `~/Applications/M14t Touch.app`; a rebuilt
+app may require refreshing those grants (see Permissions).
+
+Zoom works in views that handle native macOS pinch gestures. An app or view that
+does not support magnification may ignore the gesture. There is no automatic
+keyboard-shortcut fallback, and this does not enable system-wide Accessibility
+Zoom. Use `--debug` to see `magnify` actions when diagnosing app compatibility.
+To disable pinch while retaining scrolling and pen support, reinstall with
+`--autostart --two-finger-scroll --stylus --skip-calibration`.
+
+The isolated emitter uses undocumented CGEvent gesture fields, documented by
+[Mac Mouse Fix's TouchSimulator](https://github.com/noah-nuebling/mac-mouse-fix/blob/master/Helper/Core/Touch/TouchSimulator.m)
+and the Calftrail Touch research it credits. Future macOS releases may change
+this format. Replay checks validate gesture recognition, cancellation and
+AppKit's interpretation of zoom-in, zoom-out and phase values without posting
+test input. Physical testing on the connected Gen 1 M14t with macOS 27 also
+confirmed both zoom directions, finger tap/drag, two-finger scrolling and pen
+drawing with this mode enabled. Support still depends on the target app/view.
 
 ## Active stylus (Gen 1, opt-in)
 
@@ -368,6 +403,7 @@ m14ttouch --display 1 --invert-y              # fix a flipped axis
 --y-min / --y-max    Manual raw Y bounds
 --debug              Print every HID event and resulting action
 --two-finger-scroll  Enable Gen 1 two-finger scrolling
+--pinch-zoom         Enable native pinch zoom and two-finger scrolling
 --stylus             Enable Gen 1 active pen input
 --no-accessibility-prompt
                      Suppress the Accessibility prompt for LaunchAgents
@@ -394,9 +430,9 @@ bash test-gestures.sh
 ```
 
 Replay coverage includes stable display selection, rearrangement/resizing, reconnect
-recovery, tap/drag timing, contact IDs and slot order, both scroll axes, finger
-lifts, malformed reports, palm filtering, pen pressure/tilt, held tablet-button
-state, and cancellation. Replay tests
+recovery, tap/drag timing, contact IDs and slot order, both scroll axes, pinch
+direction and native event phases, finger lifts, malformed reports, palm
+filtering, pen pressure/tilt, held tablet-button state, and cancellation. Replay tests
 cannot establish real event delivery or app behavior; the physical validation
 above records what was tested on the connected Gen 1 panel.
 
@@ -416,6 +452,7 @@ above records what was tested on the connected Gen 1 panel.
 | Works in Terminal, stops after closing it | Use `./install.sh --autostart` |
 | Cursor jumps or windows flicker | Stop extra manual copies; run only one driver instance |
 | Pen works in monitor menu but not on Mac | Set OSD Touch Support to **Windows**, close the menu, reconnect USB-C, and run with `--stylus` |
+| Pinch does nothing | Enable `--pinch-zoom`, place both fingers before moving, and test a view that supports trackpad pinch. Lift both fingers between attempts; an established scroll stays a scroll |
 | Notes draws dots instead of continuous pen strokes | Use the current `--stylus` build: it holds the tablet button during drags and takes exclusive M14t access to prevent competing native events |
 | Input stops after changing USB connection | Upgrade UUID-only agents once with current M14t `DISPLAY_INDEX` and `--stylus --two-finger-scroll --skip-calibration`. Current installer saves physical identity for automatic recovery; unavailable or ambiguous identities stay paused |
 
@@ -423,14 +460,15 @@ above records what was tested on the connected Gen 1 panel.
 
 ## Scope & roadmap
 
-Single-touch click/drag is the default. Gen 1 two-finger scrolling is available
-as an opt-in mode; other multi-finger gestures remain out of scope.
+Single-touch click/drag is the default. Gen 1 two-finger scrolling and pinch
+zoom are opt-in modes; other multi-finger gestures remain out of scope.
 
 - [x] Single-touch → click / drag
 - [x] Auto-calibration with persistence
 - [x] Multi-display support, axis inversion
 - [x] Unit-tested coordinate mapping
 - [x] Opt-in two-finger scroll (Gen 1)
+- [x] Opt-in pinch zoom in supporting apps (Gen 1)
 - [ ] Two-finger tap → right-click
 - [ ] Menu-bar status app
 

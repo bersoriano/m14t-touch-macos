@@ -52,6 +52,7 @@ final class HIDTouchDriver {
 
     init(config: TouchConfig) {
         self.config = config
+        self.gestures = TouchGestures(pinchZoom: config.pinchZoom)
 
         // Provisional calibration; refined once the device is connected.
         let initial = CalibrationData.identity
@@ -118,6 +119,7 @@ final class HIDTouchDriver {
         }
         if config.stylus { log("✏️  Stylus ON — hover, tip drawing, lower button right-click, upper button eraser") }
         if config.twoFingerScroll {
+            if config.pinchZoom { log("🔍 Pinch zoom ON — spread to enlarge, pinch to shrink in supported apps") }
             // A held finger must turn into a drag even if the HID device stops
             // sending unchanged frames. Only pending presses need timer work.
             gestureTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in
@@ -343,6 +345,8 @@ final class HIDTouchDriver {
             case .down(let point): emitter.post(.leftMouseDown, at: point)
             case .drag(let point): emitter.post(.leftMouseDragged, at: point)
             case .up(let point): emitter.post(.leftMouseUp, at: point)
+            case .magnify(let point, let delta, let phase):
+                emitter.makeMagnifyEvent(at: point, delta: delta, phase: phase)?.post(tap: .cghidEventTap)
             case .scroll(let point, let dx, let dy):
                 scrollRemainder.x += dx
                 scrollRemainder.y += dy

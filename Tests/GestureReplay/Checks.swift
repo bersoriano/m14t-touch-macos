@@ -1,4 +1,5 @@
 import CoreGraphics
+import AppKit
 #if SWIFT_PACKAGE
 @testable import M14tTouch
 #endif
@@ -6,6 +7,10 @@ import CoreGraphics
 /// Shared scenarios for XCTest and the Command Line Tools-only runner.
 func runGestureReplayChecks(_ check: (Bool, String) -> Void) {
     runPenChecks(check)
+    runPinchChecks(check)
+    if case .run = ArgumentParser.parse(["--pinch-zoom"]) {
+        check(true, "CLI accepts pinch zoom mode")
+    } else { check(false, "CLI accepts pinch zoom mode") }
     func contact(_ id: Int, _ x: Double, _ y: Double) -> TouchContact {
         TouchContact(id: id, point: CGPoint(x: x, y: y))
     }
@@ -337,4 +342,100 @@ func runPenChecks(_ check: (Bool, String) -> Void) {
     if case .run(let config) = ArgumentParser.parse(["--stylus", "--two-finger-scroll"]) {
         check(config.stylus && config.twoFingerScroll, "pen and scrolling can run together")
     } else { check(false, "CLI accepts stylus mode") }
+}
+
+/// Replay pinch recognition and inspect AppKit's interpretation without posting events.
+func runPinchChecks(_ check: (Bool, String) -> Void) {
+    let anchor = CGPoint(x: 400, y: 1400)
+    func pair(_ left: Double = 300, _ right: Double = 500, y: Double = 1400) -> [TouchContact] {
+        [TouchContact(id: 1, point: CGPoint(x: left, y: y)),
+         TouchContact(id: 2, point: CGPoint(x: right, y: y))]
+    }
+    func isZoom(_ actions: [TouchAction], _ delta: Double, _ phase: MagnifyPhase) -> Bool {
+        guard actions.count == 1, case .magnify(let point, let value, let actualPhase) = actions[0] else { return false }
+        return point == anchor && abs(value - delta) < 0.000001 && actualPhase == phase
+    }
+    var gesture = TouchGestures(pinchZoom: true)
+    check(gesture.update(pair(), at: 0) == [.move(anchor)], "pinch candidate positions cursor without clicking")
+    check(gesture.update(pair(299, 501), at: 0.01).isEmpty, "small span jitter does not trigger zoom or scroll")
+    let spread = gesture.update(pair(280, 520).reversed(), at: 0.02)
+    check(spread.count == 2 && isZoom(Array(spread.prefix(1)), 0, .began) &&
+          isZoom(Array(spread.suffix(1)), 0.2, .changed), "spread begins native zoom with positive delta despite reordered slots")
+    check(isZoom(gesture.update(pair(300, 500), at: 0.03), -1.0/6.0, .changed),
+          "closing fingers reverses zoom within same pinch")
+    check(gesture.update(pair(320, 520, y: 1420), at: 0.04).isEmpty,
+          "moving pinching pair together does not also scroll")
+    check(isZoom(gesture.update([pair()[0]], at: 0.05), 0, .ended), "lifting first finger ends pinch once")
+    check(gesture.update(pair(), at: 0.06).isEmpty, "replacement finger cannot restart pinch before complete lift")
+    check(gesture.update([], at: 0.07).isEmpty, "pinch release emits no click or second end")
+    _ = gesture.update([pair()[0]], at: 0.1)
+    check(gesture.update([], at: 0.15) == [.down(CGPoint(x: 300, y: 1400)), .up(CGPoint(x: 300, y: 1400))],
+          "single tap recovers after pinch")
+
+    gesture = TouchGestures(pinchZoom: true)
+    _ = gesture.update(pair(), at: 0)
+    let close = gesture.update(pair(320, 480), at: 0.01)
+    check(close.count == 2 && isZoom(Array(close.suffix(1)), -0.2, .changed), "pinch closed starts zoom out")
+    check(isZoom(gesture.update([], at: 0.02), 0, .ended), "simultaneous lift ends pinch")
+
+    gesture = TouchGestures(pinchZoom: true)
+    _ = gesture.update(pair(0, 800), at: 0)
+    check(gesture.update(pair(0, 814), at: 0.01).isEmpty,
+          "wide asymmetric pinch waits for zoom threshold instead of locking to scroll")
+    let asymmetric = gesture.update(pair(0, 840), at: 0.02)
+    check(asymmetric.count == 2 && isZoom(Array(asymmetric.suffix(1)), 0.05, .changed),
+          "one stationary finger can anchor a wide pinch")
+
+    gesture = TouchGestures(pinchZoom: true)
+    _ = gesture.update(pair(), at: 0)
+    check(gesture.update(pair(315, 515, y: 1430), at: 0.01) == [.scroll(at: anchor, dx: 15, dy: 30)],
+          "parallel motion preserves both scroll axes")
+    check(gesture.update(pair(280, 550, y: 1450), at: 0.02) == [.scroll(at: anchor, dx: 0, dy: 20)],
+          "established scroll cannot turn into accidental zoom")
+
+    for reason in ["disconnect", "bad report", "display change", "pen proximity", "third finger", "contact replacement"] {
+        gesture = TouchGestures(pinchZoom: true)
+        _ = gesture.update(pair(), at: 0)
+        _ = gesture.update(pair(280, 520), at: 0.01)
+        let actions: [TouchAction]
+        switch reason {
+        case "disconnect": actions = gesture.cancel()
+        case "bad report", "display change": actions = gesture.interrupt()
+        case "pen proximity": actions = gesture.interruptForPen()
+        case "third finger": actions = gesture.update(pair() + [TouchContact(id: 3, point: .zero)], at: 0.02)
+        default: actions = gesture.update([pair()[0], TouchContact(id: 3, point: pair()[1].point)], at: 0.02)
+        }
+        check(isZoom(actions, 0, .cancelled), "\(reason) cancels active pinch at original screen anchor")
+        check(gesture.cancel().isEmpty, "\(reason) sends no duplicate pinch termination")
+    }
+
+    gesture = TouchGestures(pinchZoom: true)
+    _ = gesture.update(pair(400, 400), at: 0)
+    check(gesture.update(pair(300, 500), at: 0.01).isEmpty,
+          "coincident initial contacts cannot cause division by zero or sudden zoom")
+    gesture = TouchGestures(pinchZoom: true)
+    _ = gesture.update(pair(), at: 0)
+    _ = gesture.update(pair(280, 520), at: 0.01)
+    check(isZoom(gesture.update(pair(400, 400), at: 0.02), 0, .cancelled),
+          "collapsing contacts safely cancels pinch")
+
+    if case .run(let config) = ArgumentParser.parse(["--pinch-zoom", "--stylus"]) {
+        check(config.pinchZoom && config.twoFingerScroll && config.stylus, "pinch mode enables report path and coexists with stylus")
+    } else { check(false, "pinch CLI parses with stylus") }
+    if case .run(let config) = ArgumentParser.parse(["--two-finger-scroll"]) {
+        check(!config.pinchZoom, "scroll-only opt-in keeps previous behavior")
+    }
+
+    let emitter = MouseEmitter()
+    let phases: [(MagnifyPhase, NSEvent.Phase, Double)] = [(.began, .began, 0), (.changed, .changed, 0.2),
+        (.changed, .changed, -0.2), (.ended, .ended, 0), (.cancelled, .cancelled, 0)]
+    for (phase, expected, delta) in phases {
+        guard let cg = emitter.makeMagnifyEvent(at: anchor, delta: delta, phase: phase),
+              let ns = NSEvent(cgEvent: cg) else { check(false, "native magnify event decodes in AppKit"); continue }
+        check(ns.type == .magnify && ns.phase == expected && abs(ns.magnification - delta) < 0.00001 && cg.location == anchor,
+              "AppKit receives magnify \(phase) with correct sign and M14t location")
+        check(cg.flags.isEmpty, "pinch does not inject keyboard modifiers or system-wide zoom shortcuts")
+    }
+    check(emitter.makeMagnifyEvent(at: anchor, delta: .nan, phase: .changed) == nil,
+          "nonfinite magnification cannot reach event system")
 }

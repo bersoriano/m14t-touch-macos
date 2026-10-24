@@ -7,6 +7,21 @@ import Foundation
 /// boilerplate and gives a single, obvious place where system events originate —
 /// which matters because posting these requires Accessibility permission.
 struct MouseEmitter {
+    func makeMagnifyEvent(at point: CGPoint, delta: Double, phase: MagnifyPhase) -> CGEvent? {
+        guard delta.isFinite, point.x.isFinite, point.y.isFinite,
+              let event = CGEvent(source: nil) else { return nil }
+        // Native magnify uses an undocumented CGEvent gesture envelope:
+        // type 29, IOHID zoom subtype 8, magnitude field 113, phase field 132.
+        // See Mac Mouse Fix's TouchSimulator.m / Calftrail Touch research.
+        // Keep this isolated: Apple may change these fields in future macOS.
+        event.type = CGEventType(rawValue: 29)!
+        event.location = point
+        event.flags = []
+        event.setIntegerValueField(CGEventField(rawValue: 110)!, value: 8)
+        event.setDoubleValueField(CGEventField(rawValue: 113)!, value: delta)
+        event.setIntegerValueField(CGEventField(rawValue: 132)!, value: phase.rawValue)
+        return event
+    }
     /// Native tablet fields follow the upstream pen emitter. Keep construction
     /// separate from posting so replay checks never inject system input.
     func makePenEvent(_ action: PenAction) -> CGEvent? {
