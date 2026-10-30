@@ -9,7 +9,7 @@
 
 macOS recognises the M14t as an external display but does not provide its finger
 touch controls. This driver maps finger taps and drags to mouse input, with
-opt-in two-finger scrolling, pinch zoom and active pen support for the Gen 1 M14t.
+active pen support by default, plus opt-in two-finger scrolling and pinch zoom for the Gen 1 M14t.
 It runs entirely in user space. Pinch zoom uses undocumented macOS gesture
 event fields; other input uses Apple's public APIs.
 
@@ -155,8 +155,8 @@ index (for example, if it is now display 0):
 DISPLAY_INDEX=0 ./install.sh --autostart --two-finger-scroll --skip-calibration
 ```
 
-Include `--stylus` in reinstall commands if you use the active pen; installer
-options replace the previous login agent's options.
+Active pen support is enabled by default. Use `--no-stylus` for finger-only
+use; installer options replace the previous login agent's options.
 
 For manual launches, use `--display-uuid UUID` with the identity printed by
 `--list`. It takes precedence over `--display`. Add `--display-hardware-id V:M:S`
@@ -169,8 +169,8 @@ its physical identity, or a blank line if its serial is unavailable.
 ## Two-finger scrolling (Gen 1, opt-in)
 
 For the original 1920×1080 M14t with USB controller `2d1f:524c`, set the monitor's
-OSD **Touch Support** to **Android/Chrome** for finger-only use, or **Windows**
-when using the active pen. Turn **Auto rotation** off while calibrating. The
+OSD **Touch Support** to **Windows** for default pen support. For finger-only
+use with `--no-stylus`, **Android/Chrome** is also supported. Turn **Auto rotation** off while calibrating. The
 report parser is specific to this hardware; Gen 2 and other digitizers have not
 been validated.
 
@@ -194,12 +194,12 @@ Place both fingers together to scroll without an initial click. If a second
 finger arrives after a drag has already begun, the driver releases that drag
 before scrolling. Content follows finger motion, with scroll events anchored to
 the gesture's starting point. Lift both fingers before beginning another gesture.
-Add `--pinch-zoom` for zoom gestures and `--stylus` for Gen 1 active pen support
+Add `--pinch-zoom` for zoom gestures; Gen 1 active pen support is enabled by default
 (see below). Two-finger right-click and momentum are not supported.
 
 This mode decodes complete 40-byte `0x0c` reports containing five contact slots,
 using each contact's ID and confidence bit. It ignores secondary digitizer and
-pen reports unless `--stylus` is enabled, and releases any held mouse button on
+pen reports when `--no-stylus` is supplied, and releases any held mouse button on
 disconnection or shutdown.
 
 Run only one copy at a time. Before starting a manual debug session, stop the
@@ -262,7 +262,10 @@ test input. Physical testing on the connected Gen 1 M14t with macOS 27 also
 confirmed both zoom directions, finger tap/drag, two-finger scrolling and pen
 drawing with this mode enabled. Support still depends on the target app/view.
 
-## Active stylus (Gen 1, opt-in)
+## Active stylus (Gen 1, enabled by default)
+
+Pen support is enabled for normal launches and installations. `--stylus` remains
+accepted for existing commands; use `--no-stylus` to disable pen support.
 
 Set the monitor's physical OSD **Touch Support** to **Windows**. Close the OSD,
 then disconnect and reconnect the USB-C connection to the Mac. Wait for the
@@ -340,7 +343,7 @@ LaunchAgent. Use the current M14t display index (on a Mac where it is display 0)
 DISPLAY_INDEX=0 ./install.sh --autostart --two-finger-scroll --skip-calibration
 ```
 
-Include `--stylus` when retaining active pen support.
+Pen support is enabled by default; use `--no-stylus` to disable it.
 
 The installer checks that the LaunchAgent stays running and exits with an error
 if startup fails. Permission failures do not cause a repeated restart loop. After
@@ -407,7 +410,8 @@ m14ttouch --display 1 --invert-y              # fix a flipped axis
 --debug              Print every HID event and resulting action
 --two-finger-scroll  Enable Gen 1 two-finger scrolling
 --pinch-zoom         Enable native pinch zoom and two-finger scrolling
---stylus             Enable Gen 1 active pen input
+--stylus             Enable Gen 1 active pen input (default)
+--no-stylus          Disable active pen input
 --no-accessibility-prompt
                      Suppress the Accessibility prompt for LaunchAgents
 --list               List connected displays and exit

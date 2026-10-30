@@ -339,6 +339,15 @@ func runPenChecks(_ check: (Bool, String) -> Void) {
         check(sample.getIntegerValueField(.tabletEventPointButtons) == mask,
               "tablet button mask matches mouse event \(type.rawValue)")
     }
+    for (args, enabled): ([String], Bool) in [
+        ([], true), (["--no-stylus"], false),
+        (["--stylus", "--no-stylus"], false),
+        (["--no-stylus", "--stylus"], true)
+    ] {
+        if case .run(let config) = ArgumentParser.parse(args) {
+            check(config.stylus == enabled, "pen defaults and overrides: \(args)")
+        } else { check(false, "pen options parse: \(args)") }
+    }
     if case .run(let config) = ArgumentParser.parse(["--stylus", "--two-finger-scroll"]) {
         check(config.stylus && config.twoFingerScroll, "pen and scrolling can run together")
     } else { check(false, "CLI accepts stylus mode") }

@@ -24,7 +24,7 @@ AUTOSTART=false
 BINARY_UPDATED=false
 TWO_FINGER_SCROLL=false
 PINCH_ZOOM=false
-STYLUS=false
+STYLUS=true
 SKIP_CALIBRATION=false
 
 if ! [[ "$DISPLAY_INDEX" =~ ^[0-9]+$ ]]; then
@@ -37,7 +37,8 @@ usage() {
 Usage:
   ./install.sh              Build and calibrate display index ${DISPLAY_INDEX}
   ./install.sh --autostart  Build, calibrate, and run automatically at login
-  Add --stylus             Enable Gen 1 active stylus
+  Gen 1 active stylus is enabled by default
+  Add --no-stylus          Disable active stylus
   Add --two-finger-scroll   Enable Gen 1 two-finger scrolling
   Add --pinch-zoom          Enable pinch zoom and two-finger scrolling
   Add --skip-calibration    Keep existing ~/.m14ttouch.json
@@ -54,6 +55,9 @@ for arg in "$@"; do
             ;;
         --stylus)
             STYLUS=true
+            ;;
+        --no-stylus)
+            STYLUS=false
             ;;
         --two-finger-scroll)
             TWO_FINGER_SCROLL=true
@@ -84,6 +88,8 @@ fi
 STYLUS_ARGUMENT_XML=""
 if [[ "$STYLUS" == true ]]; then
     STYLUS_ARGUMENT_XML="        <string>--stylus</string>"
+else
+    STYLUS_ARGUMENT_XML="        <string>--no-stylus</string>"
 fi
 SCROLL_ARGUMENT_XML=""
 if [[ "$TWO_FINGER_SCROLL" == true ]]; then
@@ -172,6 +178,8 @@ else
 fi
 if [[ "$STYLUS" == true ]]; then
     DRIVER_ARGS+=(--stylus)
+else
+    DRIVER_ARGS+=(--no-stylus)
 fi
 if [[ "$TWO_FINGER_SCROLL" == true ]]; then
     DRIVER_ARGS+=(--two-finger-scroll)

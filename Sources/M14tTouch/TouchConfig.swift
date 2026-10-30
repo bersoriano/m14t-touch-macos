@@ -31,8 +31,8 @@ struct TouchConfig {
     /// Opt in to native pinch zoom alongside two-finger scrolling.
     var pinchZoom: Bool = false
 
-    /// Opt in to Gen 1 active pen reports and palm suppression.
-    var stylus: Bool = false
+    /// Enable Gen 1 active pen reports and palm suppression by default.
+    var stylus: Bool = true
 
     /// Ask macOS to show the Accessibility permission prompt when access is missing.
     var promptForAccessibility: Bool = true

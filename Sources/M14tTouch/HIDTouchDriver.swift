@@ -94,7 +94,7 @@ final class HIDTouchDriver {
         ].mapValues { Int($0) }
         if config.twoFingerScroll || config.stylus {
             // The raw report layout is specific to this Gen 1 controller.
-            // Preserve the existing usage-based match for default mode.
+            // Preserve usage-based matching when pen and scrolling are disabled.
             matching[kIOHIDVendorIDKey] = 0x2d1f
             matching[kIOHIDProductIDKey] = 0x524c
         }

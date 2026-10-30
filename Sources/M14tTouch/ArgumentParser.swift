@@ -58,6 +58,7 @@ enum ArgumentParser {
             case "--invert-y":      config.invertY = true
             case "--debug":         config.debugMode = true
             case "--stylus": config.stylus = true
+            case "--no-stylus": config.stylus = false
             case "--two-finger-scroll": config.twoFingerScroll = true
             case "--pinch-zoom":
                 config.pinchZoom = true
@@ -106,7 +107,8 @@ enum ArgumentParser {
       --y-min N            Manual raw Y minimum
       --y-max N            Manual raw Y maximum
       --debug              Print every HID event and resulting action
-      --stylus             Gen 1: pen hover, clicks, pressure and tilt
+      --stylus             Gen 1: pen hover, clicks, pressure and tilt (default)
+      --no-stylus          Disable active pen support
       --two-finger-scroll  Gen 1: one finger taps/drags, two fingers scroll
       --pinch-zoom         Gen 1: add pinch zoom; also enables two-finger scrolling
       --no-accessibility-prompt
