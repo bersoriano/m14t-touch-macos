@@ -35,6 +35,10 @@ struct TouchGestures {
     private let dragThreshold = 1.5
     private let minimumPinchDistance = 20.0
 
+    init(pinchZoom: Bool = false) {
+        self.pinchZoom = pinchZoom
+    }
+
     var isPending: Bool {
         if case .pending = state { return true }
         return false
